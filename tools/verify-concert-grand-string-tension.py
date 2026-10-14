@@ -21,7 +21,7 @@ def main():
     docs = root/'docs/concert-grand-release-body-2026-10-14'
     audit_path = docs/'string-tension.json'
     audit = json.loads(audit_path.read_text(encoding='utf-8'))
-    source_path = root/'plugins/concert-grand/src/lib.rs'
+    source_path = root/'plugin/src/lib.rs'
     measured_path = work/'measured-lib.rs'
     assert digest(measured_path) == audit['files_sha256'][str(source_path)]
     measured = measured_path.read_text(encoding='utf-8')
@@ -74,14 +74,14 @@ def main():
     wasm_sdk, wasm = build/'librackforge_plugin_sdk_wasm.rlib', build/'concert-grand.wasm'
     wasm_commands = [
         [*rust, '--target', 'wasm32-unknown-unknown', '-C', 'target-feature=+simd128', '--crate-name',
-         'rackforge_plugin_sdk', '--crate-type', 'rlib', str(root/'crates/rackforge-plugin-sdk/src/lib.rs'), '-o', str(wasm_sdk)],
+         'rackforge_plugin_sdk', '--crate-type', 'rlib', str(Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/lib.rs'), '-o', str(wasm_sdk)],
         [*rust, '--target', 'wasm32-unknown-unknown', '-C', 'target-feature=+simd128', '-C', 'link-arg=-zstack-size=8388608',
          '--crate-name', 'rackforge_concert_grand', '--crate-type', 'cdylib', '--extern',
          f'rackforge_plugin_sdk={wasm_sdk}', str(source_path), '-o', str(wasm)],
     ]
     wasm_results = [run(command, f'final-wasm-{i}') for i, command in enumerate(wasm_commands)]
-    files = [source_path, root/'plugins/concert-grand/src/math.rs', root/'crates/rackforge-plugin-sdk/src/lib.rs',
-             root/'crates/rackforge-plugin-sdk/src/portable.rs', root/'tools/concert-grand-release-probe.rs',
+    files = [source_path, root/'plugin/src/math.rs', Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/lib.rs',
+             Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/portable.rs', root/'tools/concert-grand-release-probe.rs',
              Path(__file__), Path(sdk), build/'probe.exe', build/'librackforge_concert_grand.rlib', tests, wasm]
     report = dict(source_sha256=digest(source_path), measured_source_sha256=digest(measured_path),
         acoustic_audit_sha256=digest(audit_path), production_source_unchanged_after_acoustic_audit=True,

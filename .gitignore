@@ -1,0 +1,9 @@
+/target/
+/artifacts/
+/local/
+/.rackforge/
+/plugin/package/component.wasm
+/plugin/package/native/
+*.rfplugin
+__pycache__/
+*.pyc

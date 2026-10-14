@@ -27,7 +27,7 @@ use rackforge_plugin_runtime::{PortableEngine, RuntimeLimits};
 
 fn wasm_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/wasm32-unknown-unknown/release/rackforge_concert_grand.wasm")
+        .join("../target/wasm32-unknown-unknown/release/rackforge_concert_grand.wasm")
 }
 
 #[test]

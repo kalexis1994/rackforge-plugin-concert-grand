@@ -54,8 +54,8 @@ def main():
         path = work/f'{name}.txt'
         path.write_text(''.join(f'fader.{index} = {value}\n' for index,value in values.items()),encoding='utf-8',newline='\n')
         tunings[name] = path
-    files = [Path(__file__), helper, source_path, build_path, probe, root/'plugins/concert-grand/src/lib.rs',
-             root/'plugins/concert-grand/src/math.rs', prefix_path, *tunings.values()]
+    files = [Path(__file__), helper, source_path, build_path, probe, root/'plugin/src/lib.rs',
+             root/'plugin/src/math.rs', prefix_path, *tunings.values()]
     frozen = {str(p):digest(p) for p in files}
 
     def render(name, event_path, frames, tuning):

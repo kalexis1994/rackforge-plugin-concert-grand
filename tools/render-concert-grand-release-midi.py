@@ -4,6 +4,7 @@ Uses one continuous production instance, original tempo/velocity/controllers,
 44.1 kHz stereo float WAV, unity export gain, and a five-second release tail.
 No sample cache, per-note mixing, normalization, or extra effects are used.
 """
+import os
 import argparse
 from collections import Counter
 from fractions import Fraction
@@ -109,7 +110,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     assert sha(args.midi) == 'af07dbf66a65bbb761ca0ef261e3657267350f62bb963d6f298d2ea46684122a'
     assert not args.work.exists() and not args.audio_dir.exists() and not args.report.exists()
-    production = ['plugins/concert-grand', 'crates/rackforge-plugin-sdk']
+    production = ['plugin', 'crates/rackforge-plugin-sdk']
     assert not subprocess.check_output(['git', 'diff', 'v0.1.32', '--', *production], cwd=root)
     source_events, duration = midi_events(args.midi)
     rate, block, tail = 44100, 256, 5
@@ -157,14 +158,14 @@ def main():
     piano = args.work / 'librackforge_concert_grand.rlib'
     exe = args.work / 'probe.exe'
     commands = [
-        [*rust, '--crate-name', 'rackforge_plugin_sdk', '--crate-type', 'rlib', str(root / 'crates/rackforge-plugin-sdk/src/lib.rs'), '-o', str(sdk)],
-        [*rust, '--crate-name', 'rackforge_concert_grand', '--crate-type', 'rlib', '--extern', f'rackforge_plugin_sdk={sdk}', str(root / 'plugins/concert-grand/src/lib.rs'), '-o', str(piano)],
+        [*rust, '--crate-name', 'rackforge_plugin_sdk', '--crate-type', 'rlib', str(Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/lib.rs'), '-o', str(sdk)],
+        [*rust, '--crate-name', 'rackforge_concert_grand', '--crate-type', 'rlib', '--extern', f'rackforge_plugin_sdk={sdk}', str(root / 'plugin/src/lib.rs'), '-o', str(piano)],
         [*rust, '-L', f'dependency={args.work}', '--extern', f'rackforge_plugin_sdk={sdk}', '--extern', f'rackforge_concert_grand={piano}', str(root / 'tools/concert-grand-release-probe.rs'), '-o', str(exe)],
     ]
     for command in commands:
         subprocess.run(command, check=True, cwd=root)
-    files = [root / 'tools/concert-grand-release-probe.rs', Path(__file__), root / 'plugins/concert-grand/src/lib.rs',
-             root / 'crates/rackforge-plugin-sdk/src/lib.rs', sdk, piano, exe, args.midi, event_file]
+    files = [root / 'tools/concert-grand-release-probe.rs', Path(__file__), root / 'plugin/src/lib.rs',
+             Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/lib.rs', sdk, piano, exe, args.midi, event_file]
     frozen = {str(p.resolve()): sha(p) for p in files}
     raw = args.work / 'Campanella-release-0.171.35.f32'
     command = [str(exe), str(event_file), str(raw), str(rate), str(total), str(block), 'concert']

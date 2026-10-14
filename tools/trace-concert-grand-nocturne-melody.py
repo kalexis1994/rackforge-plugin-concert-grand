@@ -15,7 +15,7 @@ def main():
     docs=root/'docs/concert-grand-release-body-2026-10-14'
     old=json.loads((docs/'nocturne-context.json').read_text(encoding='utf-8'))
     source=Path(old['observer_source_path']);assert sha(source)==old['observer_source_sha256']
-    production=root/'plugins/concert-grand/src/lib.rs';assert sha(production)==old['production_source_sha256']
+    production=root/'plugin/src/lib.rs';assert sha(production)==old['production_source_sha256']
     build=work/'melody-observer';build.mkdir(exist_ok=False)
     s=source.read_text(encoding='utf-8')
     marker='        let force = sample * (self.pan_left + self.pan_right);'
@@ -49,7 +49,7 @@ def main():
 ''')
     s=s.replace('raw.flush().unwrap();csv.flush().unwrap();','raw.flush().unwrap();csv.flush().unwrap();tap_raw.flush().unwrap();')
     path=build/'lib.rs';path.write_text(s,encoding='utf-8',newline='\n')
-    (build/'math.rs').write_bytes((root/'plugins/concert-grand/src/math.rs').read_bytes())
+    (build/'math.rs').write_bytes((root/'plugin/src/math.rs').read_bytes())
     public=json.loads((docs/'string-tension-verification.json').read_text(encoding='utf-8'))
     sdk=next(p for p in public['files_sha256'] if p.endswith('librackforge_plugin_sdk.rlib'))
     exe=build/'tests.exe'

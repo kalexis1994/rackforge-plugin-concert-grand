@@ -8,7 +8,7 @@
 //! Run with the wasm built:
 //!
 //!     cargo build --release --target wasm32-unknown-unknown -p rackforge-concert-grand
-//!     cargo test -p rackforge-plugin-runtime --test concert_grand_fuel -- --nocapture
+//!     cargo test --features host-tests -p rackforge-concert-grand --test concert_grand_fuel -- --nocapture
 
 use std::path::PathBuf;
 
@@ -17,7 +17,7 @@ use rackforge_plugin_runtime::{PortableEngine, RuntimeLimits};
 
 fn wasm_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/wasm32-unknown-unknown/release/rackforge_concert_grand.wasm")
+        .join("../target/wasm32-unknown-unknown/release/rackforge_concert_grand.wasm")
 }
 
 #[test]

@@ -44,7 +44,7 @@ def main():
     tuning={}
     for name,text in variants.items():
         p=stage/f'{name}.txt';p.write_text(text,encoding='utf-8',newline='\n');tuning[name]=p
-    frozen={str(p):sha(p) for p in [Path(__file__),prior_path,original,probe,root/'plugins/concert-grand/src/lib.rs',*paths,*tuning.values()]}
+    frozen={str(p):sha(p) for p in [Path(__file__),prior_path,original,probe,root/'plugin/src/lib.rs',*paths,*tuning.values()]}
     def render(job):
         name,event_path=job
         raw=stage/f'{name}-{event_path.stem}.f32'

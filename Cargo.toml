@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["plugin"]
+
+[workspace.package]
+version = "0.171.37"
+edition = "2024"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/kalexis1994/rackforge-plugin-concert-grand"
+
+# Published host/SDK revision; local development may override it explicitly.
+[workspace.dependencies]
+rackforge-plugin-sdk = { git = "https://github.com/kalexis1994/rackforge.git", rev = "91eb43f88495f0485e7a7ed61718280ddce23a8d" }
+rackforge-core = { git = "https://github.com/kalexis1994/rackforge.git", rev = "91eb43f88495f0485e7a7ed61718280ddce23a8d" }
+rackforge-plugin-api = { git = "https://github.com/kalexis1994/rackforge.git", rev = "91eb43f88495f0485e7a7ed61718280ddce23a8d" }
+rackforge-plugin-runtime = { git = "https://github.com/kalexis1994/rackforge.git", rev = "91eb43f88495f0485e7a7ed61718280ddce23a8d" }
+rackforge-ump = { git = "https://github.com/kalexis1994/rackforge.git", rev = "91eb43f88495f0485e7a7ed61718280ddce23a8d" }
+wasmtime = { version = "47.0.3", default-features = false, features = ["anyhow", "cache", "cranelift", "runtime", "std"] }

@@ -4,6 +4,7 @@ Screen every key at two velocities, compare the previously known references,
 check long holds, measure native cost, then render two complete MIDI pieces.
 Parallel screening timings are not performance measurements.
 """
+import os
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import importlib.util
@@ -49,12 +50,12 @@ def main():
     library = build/'librackforge_concert_grand.rlib'; exe = build/'probe.exe'
     rust = ['rustc', '+1.98.0-x86_64-pc-windows-msvc', '--edition=2024', '-O']
     commands = [
-        [*rust, '--crate-name', 'rackforge_concert_grand', '--crate-type', 'rlib', '--extern', f'rackforge_plugin_sdk={sdk}', str(root/'plugins/concert-grand/src/lib.rs'), '-o', str(library)],
+        [*rust, '--crate-name', 'rackforge_concert_grand', '--crate-type', 'rlib', '--extern', f'rackforge_plugin_sdk={sdk}', str(root/'plugin/src/lib.rs'), '-o', str(library)],
         [*rust, '-L', f'dependency={build}', '-L', f'dependency={sdk.parent}', '--extern', f'rackforge_plugin_sdk={sdk}', '--extern', f'rackforge_concert_grand={library}', str(root/'tools/concert-grand-release-probe.rs'), '-o', str(exe)],
     ]
     for command in commands: subprocess.run(command, cwd=root, check=True)
-    sources = [Path(__file__), root/'plugins/concert-grand/src/lib.rs', root/'plugins/concert-grand/src/math.rs',
-               root/'crates/rackforge-plugin-sdk/src/lib.rs', root/'crates/rackforge-plugin-sdk/src/portable.rs',
+    sources = [Path(__file__), root/'plugin/src/lib.rs', root/'plugin/src/math.rs',
+               Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/lib.rs', Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/portable.rs',
                root/'tools/concert-grand-release-probe.rs', root/'tools/measure-concert-grand-release-body.py',
                root/'tools/render-concert-grand-release-midi.py', baseline, sdk, library, exe]
     frozen = {str(path.resolve()): body.digest(path) for path in sources}
@@ -179,7 +180,7 @@ def main():
                 baseline='User-accepted common coupling (7d7546e5), acceptance recorded in 412e84c5',
                 physical_change='Sum squared modal slopes separately across strings and polarisations for the existing scalar tension glide; omit nonphysical cross-string products and onset bloom',
                 source_diff_base_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
-                source_diff=subprocess.check_output(['git','diff','--','plugins/concert-grand/src/lib.rs'],cwd=root,text=True),
+                source_diff=subprocess.check_output(['git','diff','--','plugin/src/lib.rs'],cwd=root,text=True),
                 files_sha256=frozen,compile_commands=commands,summary=summary,cases=cases,long_holds=long_rows,
                 timing=dict(scope='14-second native script; three sequential runs each, alternating order, includes raw I/O',seconds=timings,medians=medians,ratio=medians['B']/medians['A']),
                 isolated_order=isolated_order,isolated_outputs=isolated,pieces=pieces,

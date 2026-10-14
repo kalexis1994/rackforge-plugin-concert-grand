@@ -46,7 +46,7 @@ def main():
     tunings={}
     for name,values in variants.items():
         p=work/f'{name}.txt';p.write_text(''.join(f'fader.{i} = {v}\n' for i,v in values.items()),encoding='utf-8',newline='\n');tunings[name]=p
-    files=[Path(__file__),helper,source,build_path,probe,event_path,root/'plugins/concert-grand/src/lib.rs',*tunings.values()]
+    files=[Path(__file__),helper,source,build_path,probe,event_path,root/'plugin/src/lib.rs',*tunings.values()]
     frozen={str(p):sha(p) for p in files}
     def render(name):
         raw=work/f'{name}.f32'

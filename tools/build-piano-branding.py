@@ -11,7 +11,7 @@ draws those.
     tools/build-piano-branding.py --icon <logo.png>
 
 The logo is the RF - Concert Grand plaque, kept at its native size in
-plugins/concert-grand/artwork/logo.png; without it the icon is cropped from
+plugin/artwork/logo.png; without it the icon is cropped from
 the photograph's case and harp instead. The second form rebuilds the icon
 alone, which is what the mark changing calls for: the photograph the banner
 and splash were cut from does not live in this repository.
@@ -22,7 +22,7 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFilter
 
-OUT = pathlib.Path(__file__).resolve().parent.parent / "plugins/concert-grand/package/branding"
+OUT = pathlib.Path(__file__).resolve().parent.parent / "plugin/package/branding"
 LACQUER = (0, 5, 6)
 GOLD = (243, 188, 124)
 

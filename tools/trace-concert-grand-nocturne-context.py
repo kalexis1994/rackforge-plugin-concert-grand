@@ -82,7 +82,7 @@ def main():
     build=work/'observer';build.mkdir(exist_ok=False)
     docs=root/'docs/concert-grand-release-body-2026-10-14'
     public=json.loads((docs/'string-tension-verification.json').read_text(encoding='utf-8'))
-    source_path=root/'plugins/concert-grand/src/lib.rs'
+    source_path=root/'plugin/src/lib.rs'
     assert sha(source_path)==public['source_sha256']
     source=source_path.read_text(encoding='utf-8')
     marker='    #[test]\n    #[ignore = "offline body diagnosis; CG_BODY_TRACE_DIR must be a fresh directory"]'
@@ -90,9 +90,9 @@ def main():
     observed=source.replace(marker,OBSERVER+'\n'+marker)
     for filename in ('presets.json','parameters.json'):
         observed=observed.replace(f'include_str!("../package/metadata/{filename}")',
-            'include_str!(r"'+str(root/'plugins/concert-grand/package/metadata'/filename)+'")')
+            'include_str!(r"'+str(root/'plugin/package/metadata'/filename)+'")')
     path=build/'lib.rs';path.write_text(observed,encoding='utf-8',newline='\n')
-    (build/'math.rs').write_bytes((root/'plugins/concert-grand/src/math.rs').read_bytes())
+    (build/'math.rs').write_bytes((root/'plugin/src/math.rs').read_bytes())
     sdk=next(p for p in public['files_sha256'] if p.endswith('librackforge_plugin_sdk.rlib'))
     exe=build/'tests.exe'
     command=['rustc','+1.98.0-x86_64-pc-windows-msvc','--edition=2024','--test','-O','-L',f'dependency={Path(sdk).parent}',

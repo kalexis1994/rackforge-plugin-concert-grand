@@ -1,0 +1,32 @@
+{
+  "source_repository": "https://github.com/kalexis1994/rackforge",
+  "source_commit": "d07446911e8303221a1eec382602ddf7224d1cd7",
+  "extracted_commits": 218,
+  "sdk_revision": "91eb43f88495f0485e7a7ed61718280ddce23a8d",
+  "dsp_files_sha256": {
+    "plugin\\src\\lib.rs": "cb6d553c638f06fb43010984b6321ebcb9fa6f137832e755ba47eb9fa5e16b77",
+    "plugin\\src\\math.rs": "8fcbef468ccce24de475503793ee778f715f419c31bb2300d0cc0ffd4bd472ee"
+  },
+  "native_tests_passed": 82,
+  "native_tests_ignored": 69,
+  "fingerprints": [
+    "e4abcfd02a5757c1",
+    "dfb7f193962235e0"
+  ],
+  "additional_laboratory_files": [
+    "docs/PIANO_MODEL.md",
+    "docs/PIANO_MIDRANGE.md",
+    "docs/PIANO_RESEARCH.md",
+    "tools/measure-attack-fundamental.py",
+    "tools/measure-attack-vs-velocity.py",
+    "tools/measure-band-balance.py",
+    "tools/measure-dynamic-slope.py",
+    "tools/scorecard-salamander.py",
+    "tools/solve-soundboard-modes.py"
+  ],
+  "first_independent_package_version": "0.171.37",
+  "reason": "New independently packaged release; deployed 0.171.36 is left intact to avoid a same-version package content collision.",
+  "package_sha256": "f9cf0df2cabc8cd73209175b517052021b06615a126507ba6abbd63f2eaffc8c",
+  "packaged_files_match_independent_source": true,
+  "host_tool_tests_passed": 40
+}

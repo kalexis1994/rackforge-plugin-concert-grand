@@ -1,0 +1,34 @@
+{
+  "command": [
+    "nice",
+    "-n",
+    "19",
+    "/home/kalex/rackforge/bin/rackforge-core",
+    "compare-native",
+    "/home/kalex/rackforge-deploy/concert-grand-20261014-4ms/standalone-037-verified",
+    "/home/kalex/rackforge-deploy/concert-grand-20261014-4ms/build/librackforge_concert_grand.so",
+    "--seconds",
+    "4"
+  ],
+  "returncode": 0,
+  "stdout": "AUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=concert fingerprint=426bf89137232e52\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=mellow fingerprint=1a0ce163e39cf2d0\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=bright fingerprint=db4c5561fa0c7a94\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=intimate fingerprint=925e5b7a56b90bce\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=concert-308 fingerprint=25052d1cdbd4d657\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=concert-280 fingerprint=3e17d3f9225ee858\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=concert-275 fingerprint=ecdfd384358f9974\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=concert-274 fingerprint=e0408e4c2ad54345\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=concert-227 fingerprint=ae794c1826043735\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=salon-211 fingerprint=40c5aa74f17ef34b\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=parlour-185 fingerprint=9c3292ababa72c10\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=baby-150 fingerprint=f89c80a1c6da8cda\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=upright-52 fingerprint=53e45d6655266d87\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=upright-studio fingerprint=2e625d08f20cd5e2\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=player-upright fingerprint=eeae7d453f8528d7\nAUDIO_PARALLEL_TRAFFIC units=4 shared_bytes=70904 unit_channels=20 per_block_kib=506.6\nNATIVE_MATCH program=fortepiano fingerprint=9e0f856583e8c312\nNATIVE_BUILD_MATCHES programs=16 units=true blocks=12000 component_us_per_block=4644 native_us_per_block=2847 platform=linux-aarch64\n",
+  "stderr": "",
+  "archive_sha256": "f9cf0df2cabc8cd73209175b517052021b06615a126507ba6abbd63f2eaffc8c",
+  "component_sha256": "e58160074191ef0cb2b9de85e43e0bc8837f45e7ca6d35bd816426f1ae53bd35",
+  "native_sha256": "738c0a3e3d93fa30de7caef1e1d7b9353bf6ed28ef346c069ec059d09649307d",
+  "original_verification_archive_sha256": "78f1c4c1b0c68861ede382101d74fca0ada1c699faf97201a61afd2bb56f4f77",
+  "packaging_command": [
+    "python3",
+    "/home/kalex/rackforge-deploy/concert-grand-20261014-4ms/independent-packaging-check/tools/build-package.py",
+    "--rackforge-root",
+    "/home/kalex/rackforge",
+    "--component",
+    "/home/kalex/rackforge-deploy/concert-grand-20261014-4ms/standalone-037-component.wasm",
+    "--native",
+    "linux-aarch64=/home/kalex/rackforge-deploy/concert-grand-20261014-4ms/build/librackforge_concert_grand.so",
+    "--output",
+    "/home/kalex/rackforge-deploy/concert-grand-20261014-4ms/RF-Concert-Grand-independent-0.171.37.rfplugin"
+  ],
+  "packaging_stdout": "RFPLUGIN_NATIVE platform=linux-aarch64 path=native/linux-aarch64/librackforge_concert_grand.so bytes=4687872 sha256=738c0a3e3d93fa30de7caef1e1d7b9353bf6ed28ef346c069ec059d09649307d\nRFPLUGIN_WASM_PACKED path=/home/kalex/rackforge-deploy/concert-grand-20261014-4ms/RF-Concert-Grand-independent-0.171.37.rfplugin component=/home/kalex/rackforge-deploy/concert-grand-20261014-4ms/standalone-037-component.wasm bytes=4277636 sha256=f9cf0df2cabc8cd73209175b517052021b06615a126507ba6abbd63f2eaffc8c\n/home/kalex/rackforge-deploy/concert-grand-20261014-4ms/RF-Concert-Grand-independent-0.171.37.rfplugin\n",
+  "component_and_native_identical_to_verified_package": true
+}

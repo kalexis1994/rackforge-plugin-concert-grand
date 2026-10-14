@@ -31,8 +31,8 @@ def main():
     assert body.digest(args.native_probe) == accepted['files_sha256'][str(args.native_probe.resolve())]
     assert not args.work.exists() and not args.report.exists()
     args.work.mkdir(parents=True)
-    source_paths = [Path(__file__), root / 'plugins/concert-grand/src/lib.rs', root / 'plugins/concert-grand/src/math.rs',
-                    root / 'crates/rackforge-plugin-sdk/src/lib.rs', root / 'crates/rackforge-plugin-sdk/src/portable.rs',
+    source_paths = [Path(__file__), root / 'plugin/src/lib.rs', root / 'plugin/src/math.rs',
+                    Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/lib.rs', Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/portable.rs',
                     root / 'tools/measure-concert-grand-release-body.py', args.trace_probe, args.native_probe]
     frozen = {str(p.resolve()): body.digest(p) for p in source_paths}
     cases = [(note, velocity) for note in (48, 57, 58, 59, 60, 61, 62, 63, 72, 84) for velocity in (60, 110)]

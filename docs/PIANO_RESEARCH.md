@@ -1,7 +1,7 @@
 # Concert Grand — cola de investigación e implementación
 
 Papers pendientes de incorporar al modelo, en orden de implementación. Cada
-item se marca al aterrizar en `plugins/concert-grand`, con la sección de
+item se marca al aterrizar en `plugin`, con la sección de
 `PIANO_MODEL.md` que lo documenta.
 
 ## 1. Histéresis del fieltro (Stulov) — [x] (v0.19.0)

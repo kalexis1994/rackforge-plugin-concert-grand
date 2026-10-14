@@ -93,7 +93,7 @@ def main():
     a=p.parse_args();root=Path(__file__).resolve().parents[1]
     if a.work.exists() or a.report.exists():raise ValueError('fresh output paths required')
     check=self_check();a.work.mkdir(parents=True);a.report.parent.mkdir(parents=True,exist_ok=True)
-    paths=['plugins/concert-grand/src/lib.rs','plugins/concert-grand/src/math.rs',
+    paths=['plugin/src/lib.rs','plugin/src/math.rs',
         'crates/rackforge-plugin-sdk/src/lib.rs','crates/rackforge-plugin-sdk/src/portable.rs',
         'tools/concert-grand-release-probe.rs','tools/measure-concert-grand-release-body.py']
     hashes={s:digest(root/s) for s in paths}

@@ -3,6 +3,7 @@
 One continuous instance for the full MIDI. No extra gain, normalization or EQ.
 The candidate is for listening; reference metrics do not establish acceptance.
 """
+import os
 import argparse
 import importlib.util
 import json
@@ -42,13 +43,13 @@ def main():
     library = args.work / 'librackforge_concert_grand.rlib'; exe = args.work / 'probe.exe'
     rust = ['rustc', '+1.98.0-x86_64-pc-windows-msvc', '--edition=2024', '-O']
     compile_commands = [
-        [*rust, '--crate-name', 'rackforge_concert_grand', '--crate-type', 'rlib', '--extern', f'rackforge_plugin_sdk={sdk}', str(root / 'plugins/concert-grand/src/lib.rs'), '-o', str(library)],
+        [*rust, '--crate-name', 'rackforge_concert_grand', '--crate-type', 'rlib', '--extern', f'rackforge_plugin_sdk={sdk}', str(root / 'plugin/src/lib.rs'), '-o', str(library)],
         [*rust, '-L', f'dependency={args.work}', '-L', f'dependency={sdk.parent}', '--extern', f'rackforge_plugin_sdk={sdk}', '--extern', f'rackforge_concert_grand={library}', str(root / 'tools/concert-grand-release-probe.rs'), '-o', str(exe)],
     ]
     for command in compile_commands:
         subprocess.run(command, cwd=root, check=True)
-    paths = [Path(__file__), root/'plugins/concert-grand/src/lib.rs', root/'plugins/concert-grand/src/math.rs',
-             root/'crates/rackforge-plugin-sdk/src/lib.rs', root/'crates/rackforge-plugin-sdk/src/portable.rs',
+    paths = [Path(__file__), root/'plugin/src/lib.rs', root/'plugin/src/math.rs',
+             Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/lib.rs', Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/portable.rs',
              root/'tools/concert-grand-release-probe.rs', root/'tools/measure-concert-grand-release-body.py',
              baseline, baseline_raw, sdk, library, exe, events]
     frozen = {str(path.resolve()): body.digest(path) for path in paths}
@@ -118,7 +119,7 @@ def main():
     report = dict(scope=__doc__, candidate_status='Listening candidate, not yet accepted',
                   change={'C4_FUNDAMENTAL_UNISON_NARROWING': .30, 'affected_partial': 'fundamental only', 'affected_notes': [58, 59, 60, 61, 62],
                           'width_factors': [.9, .8, .7, .8, .9], 'extra_oscillators': 0, 'extra_per_sample_operations': 0},
-                  files_sha256=frozen, source_diff=subprocess.check_output(['git', 'diff', '--', 'plugins/concert-grand/src/lib.rs'], text=True, cwd=root),
+                  files_sha256=frozen, source_diff=subprocess.check_output(['git', 'diff', '--', 'plugin/src/lib.rs'], text=True, cwd=root),
                   source_diff_base_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True, cwd=root).strip(),
                   diagnosis_sha256=body.digest(docs/'body-state-diagnosis.json'), accepted_baseline_sha256=body.digest(docs/'top-unison-comparison.json'),
                   compile_commands=compile_commands, full_render=full, full_output=full_output,

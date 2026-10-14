@@ -32,7 +32,7 @@ def main():
     spec=importlib.util.spec_from_file_location('body',helper)
     body=importlib.util.module_from_spec(spec);spec.loader.exec_module(body)
     audio=Path('C:/SHARED/Piano-Ticks-Campanella-2026-10-14')
-    rate=44100; files=[Path(__file__),helper,prior_path,probe,tests,root/'plugins/concert-grand/src/lib.rs']
+    rate=44100; files=[Path(__file__),helper,prior_path,probe,tests,root/'plugin/src/lib.rs']
 
     def render(stem,events,frames,tuning=None):
         raw=stage/f'{stem}.f32'

@@ -7,7 +7,7 @@ physical model — every sample is computed, none is recorded.
 
 This document is the model's ledger. Each mechanism it implements names the
 physics it comes from and the paper that measured it; each simplification is
-stated rather than hidden. The unit tests in `plugins/concert-grand` verify the
+stated rather than hidden. The unit tests in `plugin` verify the
 claims marked *tested* — the model is allowed to be approximate, but not to
 drift from what this document says it does.
 

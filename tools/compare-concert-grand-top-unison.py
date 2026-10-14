@@ -1,4 +1,5 @@
 """Compare the tiny treble unison residual against the frozen release render."""
+import os
 import argparse
 import hashlib
 import json
@@ -40,14 +41,14 @@ def main():
     library = args.work / 'librackforge_concert_grand.rlib'
     rust = ['rustc', '+1.98.0-x86_64-pc-windows-msvc', '--edition=2024', '-O']
     compile_commands = [
-        [*rust, '--crate-name', 'rackforge_concert_grand', '--crate-type', 'rlib', '--extern', f'rackforge_plugin_sdk={sdk}', str(root / 'plugins/concert-grand/src/lib.rs'), '-o', str(library)],
+        [*rust, '--crate-name', 'rackforge_concert_grand', '--crate-type', 'rlib', '--extern', f'rackforge_plugin_sdk={sdk}', str(root / 'plugin/src/lib.rs'), '-o', str(library)],
         [*rust, '-L', f'dependency={args.work}', '-L', f'dependency={baseline.parent}', '--extern', f'rackforge_plugin_sdk={sdk}', '--extern', f'rackforge_concert_grand={library}', str(root / 'tools/concert-grand-release-probe.rs'), '-o', str(candidate)],
     ]
     for command in compile_commands:
         subprocess.run(command, check=True, cwd=root)
-    frozen_paths = [Path(__file__), root / 'tools/concert-grand-release-probe.rs', root / 'plugins/concert-grand/src/lib.rs',
-                    root / 'plugins/concert-grand/src/math.rs',
-                    root / 'crates/rackforge-plugin-sdk/src/lib.rs', candidate, library, sdk, events, baseline]
+    frozen_paths = [Path(__file__), root / 'tools/concert-grand-release-probe.rs', root / 'plugin/src/lib.rs',
+                    root / 'plugin/src/math.rs',
+                    Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/lib.rs', candidate, library, sdk, events, baseline]
     frozen = {str(p.resolve()): sha(p) for p in frozen_paths}
     rate = base['rate']
     block = base['block']
@@ -119,7 +120,7 @@ def main():
                           'note': 'Residual fades in with the existing top-octave taper; same fixed note/partial variation and unison controls'},
                   baseline_report=str(baseline_path), baseline_report_sha256=sha(baseline_path),
                   files_sha256=frozen, compile_commands=compile_commands,
-                  source_diff=subprocess.check_output(['git', 'diff', 'v0.1.32', '--', 'plugins/concert-grand/src/lib.rs'], cwd=root, text=True),
+                  source_diff=subprocess.check_output(['git', 'diff', 'v0.1.32', '--', 'plugin/src/lib.rs'], cwd=root, text=True),
                   audio_duration_seconds=len(full)/rate, full_render=full_report, full_output=full_wav,
                   full_relative_rms_delta=full_delta, isolated_note_order=notes, isolated_outputs=isolates, notes=note_reports,
                   timing={'scope': '14-second native offline script, three runs each, alternating order; includes raw I/O',

@@ -3,6 +3,7 @@
 Preserves original timing, velocities, channel messages and final pedal state.
 The explicit Concert preset replaces only the initial piano program-0 message.
 """
+import os
 import argparse
 from collections import Counter
 import importlib.util
@@ -36,12 +37,12 @@ def main():
     if render_record is None:
         render_record = build['pieces'][0]['B_render']
     probe = Path(render_record['command'][0])
-    for path in (probe, root/'plugins/concert-grand/src/lib.rs', root/'plugins/concert-grand/src/math.rs',
-                 root/'crates/rackforge-plugin-sdk/src/lib.rs', root/'crates/rackforge-plugin-sdk/src/portable.rs',
+    for path in (probe, root/'plugin/src/lib.rs', root/'plugin/src/math.rs',
+                 Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/lib.rs', Path(os.environ.get('RACKFORGE_ROOT', root.parent / 'rackforge')) / 'crates/rackforge-plugin-sdk/src/portable.rs',
                  root/'tools/concert-grand-release-probe.rs'):
         assert midi.sha(path) == build['files_sha256'][str(path.resolve())], path
     paths = [Path(__file__), helper, a.midi, a.probe_report, probe,
-             root/'plugins/concert-grand/src/lib.rs', root/'plugins/concert-grand/src/math.rs']
+             root/'plugin/src/lib.rs', root/'plugin/src/math.rs']
     if a.tuning is not None:
         paths.append(a.tuning)
     frozen = {str(path.resolve()): midi.sha(path) for path in paths}
