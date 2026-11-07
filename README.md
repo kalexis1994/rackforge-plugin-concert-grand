@@ -74,6 +74,9 @@ travel update the pending pressure.
 Partial pressure uses the same vertical and horizontal grip as a fully
 seated felt. The reference factor stays fixed until the pressure is released.
 
+The sympathetic resonance excited by a strike grows with the damper rail lift.
+At partial sustain it receives a fraction of the full-pedal excitation.
+
 Research tools use `RACKFORGE_ROOT` for SDK/tool sources and keep generated
 renders, caches and external reference recordings under ignored `local/`.
 Historical JSON measurements keep their original absolute paths and hashes.

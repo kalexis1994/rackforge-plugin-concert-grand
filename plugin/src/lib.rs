@@ -3656,6 +3656,8 @@ struct VoiceRecord {
     /// even in one instance, a later event in the same frame may already
     /// have moved by the time the work runs.
     flags: u8,
+    /// Fraction of the damper rail lift at the strike, from seated to fully lifted.
+    rail_lift: u8,
     velocity: f32,
     serial: u32,
     /// The una corda's position when this was planned. A strike needs it
@@ -3705,6 +3707,7 @@ impl VoiceRecord {
         note: 0,
         release: 0,
         flags: 0,
+        rail_lift: 0,
         velocity: 0.0,
         serial: 0,
         soft: 0.0,
@@ -3724,6 +3727,7 @@ impl VoiceRecord {
         bytes[4] = self.note;
         bytes[5] = self.release;
         bytes[6] = self.flags;
+        bytes[7] = self.rail_lift;
         bytes[8..12].copy_from_slice(&self.velocity.to_le_bytes());
         bytes[12..16].copy_from_slice(&self.serial.to_le_bytes());
         bytes[16..20].copy_from_slice(&self.soft.to_le_bytes());
@@ -3743,6 +3747,7 @@ impl VoiceRecord {
             note: bytes[4],
             release: bytes[5],
             flags: bytes[6],
+            rail_lift: bytes[7],
             velocity: f32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
             serial: u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
             soft: f32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]),
@@ -7371,7 +7376,7 @@ impl StringUnit {
         note: u8,
         velocity: f32,
         slot: usize,
-        pedal: bool,
+        rail_lift: u8,
         soft: f32,
         returned: f32,
         serial: u32,
@@ -8968,9 +8973,11 @@ impl StringUnit {
         // through the bridge and ring on slowly. Rendered as a shadow voice —
         // the same partial ladder ~24 dB down, each component detuned by its
         // own few cents (many strings, none exactly aligned), single-stage
-        // slow decay, released by the pedal like any sustained string.
+        // slow decay, released by the pedal like any sustained string. The
+        // lift at the strike sets how much vibration this resonance receives.
         phase!(4, mark);
-        if pedal && placed > 0 {
+        if rail_lift > 0 && placed > 0 {
+            let halo_gain = rail_lift as f32 / 255.0;
             let halo_count = placed.min(HALO_PARTIALS);
             // Twenty-four, which is every entry the loop below can reach --
             // `halo_count` is `placed.min(24)`. It was MAX_PARTIALS, so each
@@ -8985,7 +8992,7 @@ impl StringUnit {
                     (hash01((note as u32) << 12 | (n as u32) << 3 | 5) - 0.5) * 5.0 / 1200.0,
                 );
                 let detuned = (frequency * spread).min(nyquist);
-                let amplitude = amplitudes[n] * scale * 0.063;
+                let amplitude = amplitudes[n] * scale * 0.063 * halo_gain;
                 let t60 = self
                     .engine
                     .t60_seconds(frequency, f0, string_scale, treble_life)
@@ -9359,7 +9366,7 @@ impl StringUnit {
                         record.note,
                         record.velocity,
                         record.slot as usize,
-                        record.has(VoiceRecord::FLAG_PEDAL),
+                        record.rail_lift,
                         record.soft,
                         record.returned,
                         record.serial,
@@ -10442,11 +10449,7 @@ impl ConcertGrand {
                 slot: slot as u8,
                 channel,
                 note,
-                flags: if self.pedal {
-                    VoiceRecord::FLAG_PEDAL
-                } else {
-                    0
-                },
+                rail_lift: roundf((1.0 - self.pedal_pressure) * 255.0) as u8,
                 velocity,
                 serial: self.strike_serial,
                 soft: self.soft,
@@ -18649,7 +18652,7 @@ mod bench {
     // board and restored upper free-string modes. See the listening profile.
     const RENDER_FINGERPRINT: u64 = 0x3a11_23cb_1d7f_ff23;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0x19c7_880b_5450_9648;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0xf1a5_a4ab_09ea_1559;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.
