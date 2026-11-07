@@ -19,7 +19,7 @@ cargo build --locked --release --target wasm32-unknown-unknown -p rackforge-conc
 Run tests with one thread: model knobs are process-wide atomics. The repository
 configures the required native stack and SIMD128/8 MiB WebAssembly stack.
 Native render fingerprints for the factory voicing are
-`4ac6dcc179598db3` and `ecd67c2f8052c1c7`.
+`3a1123cb1d7fff23` and `80b2f8cd8674fdce`.
 
 Optional tools:
 
@@ -61,6 +61,12 @@ gain of the free-string bank (`UNDAMPED_MIX=1.125`) to moderate the bell-like
 ring heard on G4. The model knobs share these defaults across the factory
 bank. Each preset inherits Hammer Hard from Concert unless it sets its own
 value, as Player Upright does. Existing states keep their saved settings.
+
+The latest listening profile smooths modal overlap and bridge-position contrast
+through the middle of the soundboard, uses weighted unison leverage at the
+bridge, and progressively restores the higher free-string modes. The gain
+transition is tied to the bank's frequency reference, so the G4/G6 resonance
+remains moderated while C6 recovers its release tail.
 
 Research tools use `RACKFORGE_ROOT` for SDK/tool sources and keep generated
 renders, caches and external reference recordings under ignored `local/`.

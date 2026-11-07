@@ -1833,6 +1833,9 @@ const LANES: usize = 5;
 const LANE_HORIZONTAL: usize = 3;
 const LANE_BLOOM: usize = 4;
 
+/// Relative bridge leverage of the outer strings in a unison.
+const BRIDGE_LEVER: f32 = -0.60;
+
 #[derive(Clone, Copy, Default)]
 struct Partial {
     /// Lane-wise (structure-of-arrays) storage of the five components.
@@ -1939,10 +1942,16 @@ impl Partial {
         }
         if self.drain > 0.0 {
             let w = self.bridge_vertical;
-            // The binary inactive coordinates are exactly zero and the
-            // reaction below keeps them zero: avoid six redundant multiplies.
-            let sum_s = self.s[0] + self.s[1] + self.s[2] + horizontal * self.s[LANE_HORIZONTAL];
-            let sum_c = self.c[0] + self.c[1] + self.c[2] + horizontal * self.c[LANE_HORIZONTAL];
+            // Use the same vertical leverage for the bridge reaction
+            // and the motion that excites it.
+            let sum_s = w[0] * self.s[0]
+                + w[1] * self.s[1]
+                + w[2] * self.s[2]
+                + horizontal * self.s[LANE_HORIZONTAL];
+            let sum_c = w[0] * self.c[0]
+                + w[1] * self.c[1]
+                + w[2] * self.c[2]
+                + horizontal * self.c[LANE_HORIZONTAL];
             let take_s = self.drain * sum_s;
             let take_c = self.drain * sum_c;
             self.s[0] -= w[0] * take_s;
@@ -1954,7 +1963,10 @@ impl Partial {
             self.c[2] -= w[2] * take_c;
             self.c[LANE_HORIZONTAL] -= horizontal * take_c;
         }
-        out[0] + out[1] + out[2] + out[3] + out[4]
+        let w = self.bridge_vertical;
+        // Non-string components have no mechanical port and use lane zero.
+        let first = if w[0] > 0.0 { w[0] * out[0] } else { out[0] };
+        first + w[1] * out[1] + w[2] * out[2] + out[3] + out[4]
     }
 
     /// The per-sample drain that reaches the same coherent-mode loss in
@@ -8236,8 +8248,15 @@ impl StringUnit {
                     sample_rate,
                 ),
             );
-            built.bridge_vertical = [1.0, if second > 0.0 { 1.0 } else { 0.0 },
-                if third_string > 0.0 { 1.0 } else { 0.0 }];
+            // Opposite lever arms across the unison keep the in-phase
+            // sum at one per string. Absent strings have no bridge port.
+            built.bridge_vertical = if third_string > 0.0 {
+                [1.0 - BRIDGE_LEVER, 1.0, 1.0 + BRIDGE_LEVER]
+            } else if second > 0.0 {
+                [1.0 - BRIDGE_LEVER, 1.0 + BRIDGE_LEVER, 0.0]
+            } else {
+                [1.0, 0.0, 0.0]
+            };
             built.configure_bridge(drained, horizontal_bridge);
             built.slope = {
                 let h = (n + 1) as f32;
@@ -8271,6 +8290,12 @@ impl StringUnit {
                         ),
                     );
                 }
+            }
+            // Keep the original onset cancellation with the new leverage.
+            for lane in 0..3 {
+                let correction = built.bridge_vertical[lane] - 1.0;
+                built.s[LANE_BLOOM] -= correction * built.s[lane];
+                built.c[LANE_BLOOM] -= correction * built.c[lane];
             }
             partials[placed] = built;
             placed += 1;
@@ -9653,6 +9678,15 @@ impl ConcertGrand {
         // bottom, log-linear from 300 Hz down to BOARD_LOW_LOSS at 50 Hz.
         let low = (log2f(300.0 / placed.max(20.0)) / log2f(6.0)).clamp(0.0, 1.0);
         let loss_here = loss * powf(BOARD_LOW_LOSS.get() / BOARD_LOSS_FACTOR.get(), low);
+        let ease = |t: f32| {
+            let t = t.clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        // Blend the added overlap in and out through the middle band.
+        let band = ease((placed - 700.0) / 350.0) * ease((3600.0 - placed) / 1300.0);
+        let t = ((placed - 1000.0) / 200.0).clamp(0.0, 1.0);
+        let transition = 4.0 * t * (1.0 - t);
+        let loss_here = loss_here * (1.0 + 2.0 * transition * transition) * (1.0 + 0.30 * band);
         let (mut mode, mut cold) = BoardMode::tune(
             placed,
             board_t60(placed, loss_here),
@@ -9697,7 +9731,7 @@ impl ConcertGrand {
             mode.drive = -mode.drive;
         }
         {
-            let depth = BOARD_SHAPE.get().clamp(0.0, 1.0);
+            let depth = BOARD_SHAPE.get().clamp(0.0, 1.0) * (1.0 - 0.10 * band);
             let theta = core::f32::consts::TAU * hash01(0x5A4E ^ seed << 11);
             let (sin_theta, cos_theta) = sincosf(theta);
             let half_waves = (BOARD_DRIVE_POINTS - 1) as f32 * sqrtf(placed / BOARD_SHAPE_TOP_HZ);
@@ -9921,7 +9955,11 @@ impl ConcertGrand {
                     }
                     let tuned = hz * powf(2.0, side * spread);
                     let mut string = BodyMode::tune(tuned, t60, pan, self.engine.sample_rate);
-                    string.drive *= 0.7;
+                    // Restore the high modes progressively above the bank's
+                    // low-frequency reference, leaving the bottom moderated.
+                    let t = ((tuned / low.max(1.0) - 0.85) / 0.30).clamp(0.0, 1.0);
+                    let upper = t * t * (3.0 - 2.0 * t);
+                    string.drive *= 0.7 * (1.0 + upper);
                     let (y1, y2) = (self.undamped[index].y1, self.undamped[index].y2);
                     self.undamped[index] = string;
                     self.undamped[index].y1 = y1;
@@ -13203,7 +13241,7 @@ mod tests {
     /// still give up something, or it is not a pedal.
     #[test]
     fn the_left_pedal_is_two_mechanisms_and_a_piano_has_one() {
-        let struck = |upright: bool, pedal: u8| -> f32 {
+        let struck = |upright: bool, pedal: u8| -> (f32, f32) {
             let mut piano = prepared();
             piano.engine.controls.action = if upright { 1.0 } else { 0.0 };
             render(
@@ -13218,21 +13256,29 @@ mod tests {
                     note_on(60, 90),
                 ],
             );
-            energy(&render(&mut piano, (FS * 0.3) as usize, &[]))
+            let voice = piano.voices().find(|voice| voice.active && voice.note == 60).unwrap();
+            let partial = &voice.partials[0];
+            let vertical_energy: f32 = (0..3).map(|lane| partial.lane_magnitude_squared(lane)).sum();
+            let third_share = partial.lane_magnitude_squared(2) / vertical_energy;
+            let sound = energy(&render(&mut piano, (FS * 0.3) as usize, &[]));
+            (sound, third_share)
         };
-        let (grand_up, upright_up) = (struck(false, 0), struck(true, 0));
+        let (grand_up, upright_up) = (struck(false, 0).0, struck(true, 0).0);
         assert!(
             (grand_up - upright_up).abs() <= grand_up * 1e-6,
             "pedal up, the action must not matter: grand {grand_up} vs upright {upright_up}"
         );
-        let (grand, upright) = (struck(false, 127), struck(true, 127));
+        let ((grand, grand_third), (upright, upright_third)) = (struck(false, 127), struck(true, 127));
         assert!(
             upright < upright_up,
             "an upright's pedal did nothing: {upright_up} -> {upright}"
         );
+        assert!(grand < grand_up, "a grand's pedal did nothing: {grand_up} -> {grand}");
+        // Both mechanisms soften the note. Compare the actual string share
+        // to distinguish a shifted strike from the upright's shorter travel.
         assert!(
-            grand < upright,
-            "a grand's shift should cost more than an upright's rail: grand {grand}, upright {upright}"
+            grand_third < 0.5 * upright_third,
+            "the grand's shift should excite its outer string less: {grand_third} vs {upright_third}"
         );
     }
 
@@ -14125,14 +14171,21 @@ mod tests {
         for count in 1..=3 {
             for horizontal in [0.0f32, 0.12, 1.0] {
                 let mut weights = [0.0f64; 4];
-                weights[..count].fill(1.0);
+                let vertical: [f32; 3] = match count {
+                    1 => [1.0, 0.0, 0.0],
+                    2 => [1.6, 0.4, 0.0],
+                    _ => [1.6, 1.0, 0.4],
+                };
+                for (weight, lever) in weights.iter_mut().zip(vertical) {
+                    *weight = lever as f64;
+                }
                 weights[3] = horizontal as f64;
                 let norm = weights.iter().map(|w| w*w).sum::<f64>();
                 for drained in [0.01f32, 0.2, 0.6] {
                     let k = (1.0-(1.0-drained as f64).powf(1.0/CULL_INTERVAL as f64))/norm;
                     for seed in 0..32u32 {
                         let mut p = Partial::default();
-                        p.bridge_vertical[..count].fill(1.0);
+                        p.bridge_vertical = vertical;
                         for lane in 0..4 {
                             if lane < count || lane == LANE_HORIZONTAL {
                                 p.s[lane] = hash01(seed*19+lane as u32)*0.2-0.1;
@@ -14161,7 +14214,7 @@ mod tests {
                         }
                     }
                     let mut coherent = Partial::default();
-                    coherent.bridge_vertical[..count].fill(1.0);
+                    coherent.bridge_vertical = vertical;
                     for i in 0..4 {
                         coherent.rc[i] = 1.0;
                         coherent.s[i] = weights[i] as f32;
@@ -18539,11 +18592,11 @@ mod bench {
     /// Nothing about the instrument's sound should move by accident, and
     /// until now nothing stopped it -- these two tests printed their hash and
     /// asserted nothing, so they passed whatever the instrument did.
-    // The approved factory voicing uses version C with the free-string bank
-    // at half gain. See the listening profile in the README.
-    const RENDER_FINGERPRINT: u64 = 0x4ac6_dcc1_7959_8db3;
+    // The approved factory voicing includes the weighted bridge, smoother
+    // board and restored upper free-string modes. See the listening profile.
+    const RENDER_FINGERPRINT: u64 = 0x3a11_23cb_1d7f_ff23;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0xecd6_7c2f_8052_c1c7;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0x80b2_f8cd_8674_fdce;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.
