@@ -76,6 +76,8 @@ seated felt. The reference factor stays fixed until the pressure is released.
 
 The sympathetic resonance excited by a strike grows with the damper rail lift.
 At partial sustain it receives a fraction of the full-pedal excitation.
+The felt seats fully only at the end of the rail travel. Repeating a partial
+pedal position preserves the pending contact and pressure.
 
 Research tools use `RACKFORGE_ROOT` for SDK/tool sources and keep generated
 renders, caches and external reference recordings under ignored `local/`.

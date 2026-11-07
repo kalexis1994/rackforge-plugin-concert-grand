@@ -7050,8 +7050,9 @@ impl StringEngine {
         if sostenuto && voice.sostenuto {
             return;
         }
+        let seated = pressure >= 1.0;
         if voice.damper_phase == DAMPER_WAIT_PARTIAL {
-            if pressure < 0.98 {
+            if !seated {
                 // Keep the latest rail position while the felt is falling.
                 voice.damper_seat = pressure;
                 if pressure <= 0.0 {
@@ -7069,13 +7070,13 @@ impl StringEngine {
         // output grew for two seconds from 96 s in, sat on the ceiling
         // for eight and went non-finite. Quantised to on/off the same
         // passage was fine, which is what named the path.
-        let firmness = if pressure >= 0.98 {
+        let firmness = if seated {
             Self::damper_firmness(serial, voice.note)
         } else {
             voice.firmness
         };
         let damper = Self::damper_for(voice.note, rate, grip * firmness, 1.0);
-        if pressure >= 0.98 {
+        if seated {
             // Seated: the legacy full damp, note over.
             voice.set_rail_pressure(damper, 0.0);
             voice.damp(damper, thud.0, thud.1, release_gain * firmness);
@@ -18652,7 +18653,7 @@ mod bench {
     // board and restored upper free-string modes. See the listening profile.
     const RENDER_FINGERPRINT: u64 = 0x3a11_23cb_1d7f_ff23;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0xf1a5_a4ab_09ea_1559;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0xda06_61e5_dc4f_9358;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.
