@@ -73,6 +73,10 @@ It preserves an already strong prompt decay and redistributes coherent loss,
 mode splitting and horizontal participation according to the estimated load.
 The higher partials keep their established bridge response.
 
+Where the upper fundamental has very little bridge load, a fraction of the
+continuous loss estimate damps out-of-phase motion. The projected coherent
+motion retains its existing decay rate.
+
 With partial sustain, a released key gives its felt time to reach the string
 before applying the pressure left by the rail. Pedal changes during that
 travel update the pending pressure.

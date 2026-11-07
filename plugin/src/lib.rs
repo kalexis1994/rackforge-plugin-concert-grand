@@ -1860,7 +1860,9 @@ struct Partial {
     rs: [f32; LANES],
     /// The bridge's drain on the coherent configuration, per SAMPLE: each
     /// string lane loses this fraction of the weighted lane sum every tick,
-    /// the horizontal lane `HORIZONTAL_BRIDGE` times it. See `Partial::tick`.
+    /// the horizontal lane `HORIZONTAL_BRIDGE` times it. When common loss
+    /// already carries orthogonal damping, a signed correction restores
+    /// the coherent retention. See `Partial::tick`.
     drain: f32,
     /// Bridge radiation per control step, as the fraction of the coherent
     /// sum each string loses. Zero for components that bypass the bridge.
@@ -1940,7 +1942,7 @@ impl Partial {
             self.c[lane] = c;
             *output = s;
         }
-        if self.drain > 0.0 {
+        if self.drain != 0.0 {
             let w = self.bridge_vertical;
             // Use the same vertical leverage for the bridge reaction
             // and the motion that excites it.
@@ -4664,7 +4666,7 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
                 // A coupled string may be momentarily quiet and receive
                 // motion from its neighbours later. Cull the whole partial
                 // by its joint norm instead of deleting such a coordinate.
-                let connected = partial.drain > 0.0
+                let connected = partial.drain != 0.0
                     && (lane < 3 && partial.bridge_vertical[lane] > 0.0
                         || lane == LANE_HORIZONTAL);
                 if !connected && partial.lane_magnitude_squared(lane) < knob_dead_magnitude_squared {
@@ -6105,6 +6107,10 @@ const BRIDGE_MODAL_STRENGTH: f32 = 3.5;
 const BRIDGE_UNISON_LEAK: f32 = 0.045;
 const BRIDGE_PROMPT_CONFIDENCE: f32 = 1.8;
 const BRIDGE_WEAK_SPLIT: f32 = -1.75;
+
+// Orthogonal damping under an almost unloaded fundamental, relative to
+// the continuous bridge-loss estimate.
+const BRIDGE_ORTHOGONAL_FLOOR: f32 = 0.75;
 
 fn bridge_modal_window(frequency: f32) -> f32 {
     let reach = (frequency / (2.0 * BOARD_MEASURED_KNEE_HZ)).min(1.0);
@@ -8176,6 +8182,7 @@ impl StringUnit {
             let mut t60 = self
                 .engine
                 .t60_seconds(frequency, f0, string_scale, treble_life);
+            let continuous_t60 = t60;
             // Apply the low-mode load estimate to the fundamental, where
             // the prompt calibration can constrain it. Higher partials
             // keep the existing loading law.
@@ -8201,6 +8208,14 @@ impl StringUnit {
             let weak_load = (1.0 - modal_load).max(0.0);
             let horizontal_share = horizontal_share * (1.0 + weak_load);
             let t60 = t60 * board_decay * self.engine.cal(note, 4) * string_life;
+            let floor_reach = if n == 0 {
+                let above = (frequency - 2.0 * BOARD_MEASURED_KNEE_HZ).max(0.0);
+                let ratio = above / (0.02 * frequency);
+                let squared = ratio * ratio;
+                squared / (1.0 + squared)
+            } else {
+                0.0
+            };
             // Geometric, and WIDE. The linear x0.55-1.45 spread kept every
             // cluster's beat rate within a factor 2.6, so with rate
             // proportional to frequency the FIRST nulls of every 2-4 kHz
@@ -8287,12 +8302,21 @@ impl StringUnit {
             let bridge_rate = (LN_1000 * (1.0 / fast_t60 - 1.0 / slow_t60)).max(0.0);
             let bridge_rate = bridge_rate * modal_load;
             let bridge_leak = BRIDGE_UNISON_LEAK * modal_excess;
+            let orthogonal_rate = if floor_reach > 0.0 {
+                let natural_t60 = (continuous_t60 * board_decay * self.engine.cal(note, 4)
+                    * string_life * self.engine.controls.lab(11)).max(0.02);
+                let natural_rate = (LN_1000 * (1.0 / natural_t60 - 1.0 / slow_t60)).max(0.0);
+                (natural_rate * BRIDGE_ORTHOGONAL_FLOOR * floor_reach - bridge_rate).max(0.0)
+            } else {
+                0.0
+            };
             // Finite separation between strings lets the bridge see some
             // motion even when the net force of the unison cancels. Split
             // the passive load between the common loss and the coherent
             // projection. Their sum for in-phase motion stays the same.
             let intrinsic = self.engine.decay_per_sample(slow_t60);
-            let intrinsic = intrinsic * expf(-bridge_rate * bridge_leak / sample_rate);
+            let slow_bridge_rate = bridge_rate * bridge_leak + orthogonal_rate;
+            let intrinsic = intrinsic * expf(-slow_bridge_rate / sample_rate);
             let coherent_rate = bridge_rate * (1.0 - bridge_leak);
             let drained = 1.0 - expf(-coherent_rate * CULL_INTERVAL as f32 / sample_rate);
             // How fast a partial reaches its amplitude. It is NOT a swell.
@@ -8361,6 +8385,16 @@ impl StringUnit {
                 [1.0, 0.0, 0.0]
             };
             built.configure_bridge(drained, horizontal_bridge);
+            if orthogonal_rate > 0.0 {
+                // The common pole already includes the slow loss. Relieve
+                // it along the coherent port so only the orthogonal motion
+                // feels that share. Both combined rates are nonnegative.
+                let norm = built.bridge_vertical.iter().map(|w| w*w).sum::<f32>()
+                    + horizontal_bridge * horizontal_bridge;
+                let retention = (1.0 - drained).clamp(1e-6, 1.0);
+                let compensation = expf(orthogonal_rate / sample_rate);
+                built.drain = (1.0 - powf(retention, 1.0 / CULL_INTERVAL as f32) * compensation) / norm;
+            }
             built.slope = {
                 let h = (n + 1) as f32;
                 let sign = if n % 2 == 0 { 1.0 } else { -1.0 };
@@ -18702,7 +18736,7 @@ mod bench {
     // board and restored upper free-string modes. See the listening profile.
     const RENDER_FINGERPRINT: u64 = 0x6682_df50_84f0_36c0;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0x1486_b903_0546_8d1d;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0x6a6f_bcd1_d08e_48cf;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.
