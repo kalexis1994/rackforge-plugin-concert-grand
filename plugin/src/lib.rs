@@ -3406,6 +3406,8 @@ pub static UNDAMPED_T60_HIGH_S: Knob = Knob::new(0.9);
 /// strongly enough to sound bell-like. Halve the bank's gain across the
 /// keyboard, keeping its sympathetic tail and the saved fader mapping.
 pub static UNDAMPED_MIX: Knob = Knob::with_factory(2.25, 1.125);
+const FREE_BRIDGE_ROLLOFF: f32 = 0.9;
+const FREE_BRIDGE_CURVE: f32 = 0.8;
 
 /// The damped strings, ringing anyway: the bed under every note.
 ///
@@ -10137,6 +10139,10 @@ impl ConcertGrand {
                     let t = ((tuned / low.max(1.0) - 0.85) / 0.30).clamp(0.0, 1.0);
                     let upper = t * t * (3.0 - 2.0 * t);
                     string.drive *= 0.7 * (1.0 + upper);
+                    // Limit excitation on the lower side of the bank's
+                    // existing mobility transition.
+                    let participation = powf(1.0 - upper, FREE_BRIDGE_CURVE);
+                    string.drive *= 1.0 - FREE_BRIDGE_ROLLOFF * participation;
                     let (y1, y2) = (self.undamped[index].y1, self.undamped[index].y2);
                     self.undamped[index] = string;
                     self.undamped[index].y1 = y1;
@@ -18767,9 +18773,9 @@ mod bench {
     /// asserted nothing, so they passed whatever the instrument did.
     // The approved factory voicing includes the weighted bridge, smoother
     // board and restored upper free-string modes. See the listening profile.
-    const RENDER_FINGERPRINT: u64 = 0x6682_df50_84f0_36c0;
+    const RENDER_FINGERPRINT: u64 = 0x5af4_65a8_de76_41d3;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0x521b_2a92_0d29_3944;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0xec53_539f_0a2b_d7f6;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.

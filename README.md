@@ -19,7 +19,7 @@ cargo build --locked --release --target wasm32-unknown-unknown -p rackforge-conc
 Run tests with one thread: model knobs are process-wide atomics. The repository
 configures the required native stack and SIMD128/8 MiB WebAssembly stack.
 Native render fingerprints for the factory voicing are
-`6682df5084f036c0` and `521b2a920d293944`.
+`5af465a8de7641d3` and `ec53539f0a2bd7f6`.
 
 Optional tools:
 
@@ -67,6 +67,8 @@ through the middle of the soundboard, uses weighted unison leverage at the
 bridge, and progressively restores the higher free-string modes. The gain
 transition is tied to the bank's frequency reference, so the G4/G6 resonance
 remains moderated while C6 recovers its release tail.
+Excitation tapers down at the lower edge of the undamped-string bank to
+reduce late partial buildup. The upper modes retain their existing gain.
 
 A shared low-mode bridge rule adjusts the fundamental across the keyboard.
 It preserves an already strong prompt decay and redistributes coherent loss,
