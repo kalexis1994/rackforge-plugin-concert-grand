@@ -5102,7 +5102,8 @@ impl Default for Controls {
             mic_distance: 0.6598,
             mic_pattern: 0.6,
             action_noise: -5.298128,
-            release_noise: -9.63296,
+            // Keep the return and felt audible under the string tail.
+            release_noise: -18.63296,
             pedal_noise: 0.0,
             // The subtle level the user's ear chose, eleven and a half
             // decibels under the calibrated burst.
@@ -13730,6 +13731,9 @@ mod tests {
         // state, leaves a different tail once the rail has moved on.
         let tail = |skips: usize| -> f32 {
             let mut piano = prepared();
+            // Measure landing variation at a fixed noise level, independent
+            // of the factory mix.
+            assert!(piano.set_parameter(PARAM_RELEASE_NOISE, -9.63296));
             for _ in 0..skips {
                 piano.release(0, 21, None);
             }
@@ -14999,12 +15003,13 @@ mod tests {
 
         let factory = Controls::default();
         let read = piano.engine.controls;
+        // The legacy fader retains its old level after the factory adjustment.
+        assert!((read.release_noise + 9.63296).abs() < 1e-4);
         for (name, was, now) in [
             ("level", read.level, factory.level),
             ("room size", read.room_size, factory.room_size),
             ("mic distance", read.mic_distance, factory.mic_distance),
             ("action noise", read.action_noise, factory.action_noise),
-            ("release noise", read.release_noise, factory.release_noise),
             ("pedal noise", read.pedal_noise, factory.pedal_noise),
             ("board damping", read.board_damping, factory.board_damping),
             ("board density", read.board_density, factory.board_density),
@@ -18775,7 +18780,7 @@ mod bench {
     // board and restored upper free-string modes. See the listening profile.
     const RENDER_FINGERPRINT: u64 = 0x5af4_65a8_de76_41d3;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0xec53_539f_0a2b_d7f6;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0x527e_9aef_ea1c_f737;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.

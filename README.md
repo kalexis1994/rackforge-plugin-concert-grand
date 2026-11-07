@@ -19,7 +19,7 @@ cargo build --locked --release --target wasm32-unknown-unknown -p rackforge-conc
 Run tests with one thread: model knobs are process-wide atomics. The repository
 configures the required native stack and SIMD128/8 MiB WebAssembly stack.
 Native render fingerprints for the factory voicing are
-`5af465a8de7641d3` and `ec53539f0a2bd7f6`.
+`5af465a8de7641d3` and `527e9aefea1cf737`.
 
 Optional tools:
 
