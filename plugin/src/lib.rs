@@ -6097,6 +6097,37 @@ pub static ACTION_RATIO: Knob = Knob::new(5.5);
 /// `BRIDGE_PROMPT_DB_S`.
 pub static PROMPT_MEASURED_POWER: Knob = Knob::new(1.0);
 
+// The low-mode bank supplies a conductance proxy. Its spread and strength
+// are effective values, calibrated against acoustic decay.
+const BRIDGE_MODAL_WIDTH: f32 = 0.12;
+const BRIDGE_MODAL_REFERENCE: f32 = 0.5;
+const BRIDGE_MODAL_STRENGTH: f32 = 3.5;
+const BRIDGE_UNISON_LEAK: f32 = 0.045;
+const BRIDGE_PROMPT_CONFIDENCE: f32 = 1.8;
+const BRIDGE_WEAK_SPLIT: f32 = -1.75;
+
+fn bridge_modal_window(frequency: f32) -> f32 {
+    let reach = (frequency / (2.0 * BOARD_MEASURED_KNEE_HZ)).min(1.0);
+    1.0 - reach * reach
+}
+
+fn bridge_modal_load(frequency: f32, window: f32, adjustment: f32) -> (f32, f32) {
+    if adjustment <= 0.0 || window == 0.0 {
+        return (1.0, 0.0);
+    }
+    let conductance: f32 = BOARD_LOW_MODES
+        .iter()
+        .map(|&(mode, _)| {
+            let ratio = frequency / mode;
+            let detune = (ratio - 1.0 / ratio) / BRIDGE_MODAL_WIDTH;
+            1.0 / (1.0 + detune * detune)
+        })
+        .sum();
+    let contrast = (conductance - BRIDGE_MODAL_REFERENCE) * window * window;
+    let strength = BRIDGE_MODAL_STRENGTH * adjustment;
+    (expf(strength * contrast).clamp(0.35, 3.0), contrast.clamp(0.0, 1.0))
+}
+
 /// The power of MIDI velocity the note's level grows with. Ships at the
 /// 2.2 it has always been, which is today's sound. Measured against the
 /// Salamander's sixteen layers (2026-09-08, peak level of the sample per
@@ -8145,20 +8176,30 @@ impl StringUnit {
             let mut t60 = self
                 .engine
                 .t60_seconds(frequency, f0, string_scale, treble_life);
-            if n == 0 {
-                // The fundamental's prompt stage as the reference measured
-                // it at this key -- the bridge's conductance at this point
-                // and pitch, which no smooth law carries. The law's own
-                // controls (the Decay fader, the treble life) stay on top
-                // of it: the table is the mechanism, not the setting.
+            // Apply the low-mode load estimate to the fundamental, where
+            // the prompt calibration can constrain it. Higher partials
+            // keep the existing loading law.
+            let (modal_load, modal_excess) = if n == 0 {
+                let window = bridge_modal_window(frequency);
                 let controls = (0.5 + 1.5 * self.engine.controls.decay)
                     * self.engine.hf_life(frequency * string_scale);
                 let measured = measured_prompt_t60(note) * controls;
-                t60 *= powf(
-                    measured / t60.max(1e-3),
-                    prompt_measured_power * measured_prompt_share(note),
-                );
-            }
+                let ratio = measured / t60.max(1e-3);
+                // Retain the established prompt where it is already fast
+                // relative to the continuous loading law.
+                let relative_rate = 1.0 / ratio;
+                let adjustment = 1.0 - ((relative_rate - 1.0) / (BRIDGE_PROMPT_CONFIDENCE - 1.0))
+                    .clamp(0.0, 1.0);
+                let blend = (1.0 - window * window * adjustment) * prompt_measured_power;
+                t60 *= powf(ratio, blend * measured_prompt_share(note));
+                bridge_modal_load(frequency, window, adjustment)
+            } else {
+                (1.0, 0.0)
+            };
+            // The weak port has less effective splitting and gives a larger
+            // share of the excitation to the slow horizontal polarization.
+            let weak_load = (1.0 - modal_load).max(0.0);
+            let horizontal_share = horizontal_share * (1.0 + weak_load);
             let t60 = t60 * board_decay * self.engine.cal(note, 4) * string_life;
             // Geometric, and WIDE. The linear x0.55-1.45 spread kept every
             // cluster's beat rate within a factor 2.6, so with rate
@@ -8174,7 +8215,7 @@ impl StringUnit {
                     unison_jitter_spread,
                     hash01((note as u32) << 10 | (n as u32) << 2 | 1) - 0.5,
                 );
-            let cents = detune_cents * jitter;
+            let cents = detune_cents * jitter * (1.0 + BRIDGE_WEAK_SPLIT * weak_load).clamp(0.2, 1.8);
             // The strings of the unison, struck together and equal: their
             // subsequent life -- fast coherent decay, dephasing, the long
             // trapped tail, the churn -- is simulated through the bridge
@@ -8243,9 +8284,17 @@ impl StringUnit {
                 * self.engine.controls.lab(12))
             .max(0.05);
             let fast_t60 = (t60 * self.engine.controls.lab(11)).max(0.02);
+            let bridge_rate = (LN_1000 * (1.0 / fast_t60 - 1.0 / slow_t60)).max(0.0);
+            let bridge_rate = bridge_rate * modal_load;
+            let bridge_leak = BRIDGE_UNISON_LEAK * modal_excess;
+            // Finite separation between strings lets the bridge see some
+            // motion even when the net force of the unison cancels. Split
+            // the passive load between the common loss and the coherent
+            // projection. Their sum for in-phase motion stays the same.
             let intrinsic = self.engine.decay_per_sample(slow_t60);
-            let bridge_rate = (6.907_755 * (1.0 / fast_t60 - 1.0 / slow_t60)).max(0.0);
-            let drained = 1.0 - expf(-bridge_rate * CULL_INTERVAL as f32 / sample_rate);
+            let intrinsic = intrinsic * expf(-bridge_rate * bridge_leak / sample_rate);
+            let coherent_rate = bridge_rate * (1.0 - bridge_leak);
+            let drained = 1.0 - expf(-coherent_rate * CULL_INTERVAL as f32 / sample_rate);
             // How fast a partial reaches its amplitude. It is NOT a swell.
             //
             // This used to read "a bass note does not arrive, it gathers",
@@ -18651,9 +18700,9 @@ mod bench {
     /// asserted nothing, so they passed whatever the instrument did.
     // The approved factory voicing includes the weighted bridge, smoother
     // board and restored upper free-string modes. See the listening profile.
-    const RENDER_FINGERPRINT: u64 = 0x3a11_23cb_1d7f_ff23;
+    const RENDER_FINGERPRINT: u64 = 0x6682_df50_84f0_36c0;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0xda06_61e5_dc4f_9358;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0x1486_b903_0546_8d1d;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.

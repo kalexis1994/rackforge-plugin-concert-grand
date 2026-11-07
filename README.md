@@ -68,6 +68,11 @@ bridge, and progressively restores the higher free-string modes. The gain
 transition is tied to the bank's frequency reference, so the G4/G6 resonance
 remains moderated while C6 recovers its release tail.
 
+A shared low-mode bridge rule adjusts the fundamental across the keyboard.
+It preserves an already strong prompt decay and redistributes coherent loss,
+mode splitting and horizontal participation according to the estimated load.
+The higher partials keep their established bridge response.
+
 With partial sustain, a released key gives its felt time to reach the string
 before applying the pressure left by the rail. Pedal changes during that
 travel update the pending pressure.
