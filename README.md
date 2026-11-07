@@ -19,7 +19,7 @@ cargo build --locked --release --target wasm32-unknown-unknown -p rackforge-conc
 Run tests with one thread: model knobs are process-wide atomics. The repository
 configures the required native stack and SIMD128/8 MiB WebAssembly stack.
 Native render fingerprints for the factory voicing are
-`3a1123cb1d7fff23` and `19c7880b54509648`.
+`6682df5084f036c0` and `f52d4a9bc1f13fd5`.
 
 Optional tools:
 
@@ -76,6 +76,10 @@ The higher partials keep their established bridge response.
 Where the upper fundamental has very little bridge load, a fraction of the
 continuous loss estimate damps out-of-phase motion. The projected coherent
 motion retains its existing decay rate.
+
+In the upper register the horizontal polarization couples less strongly to
+the bridge. Its participation follows the string frequency and is used in
+both the force sum and the bridge reaction.
 
 With partial sustain, a released key gives its felt time to reach the string
 before applying the pressure left by the rail. Pedal changes during that

@@ -4092,6 +4092,8 @@ struct Voice<const PARTIALS: usize = MAX_PARTIALS> {
     keybed_out: f32,
     pan_left: f32,
     pan_right: f32,
+    /// Participation of this string scale in the bridge port.
+    horizontal_bridge: f32,
     /// Where on the bridge this string drives the board: the drive point
     /// below its position and the share that goes to the one above.
     drive_index: usize,
@@ -4219,6 +4221,7 @@ impl<const PARTIALS: usize> Default for Voice<PARTIALS> {
             thump_keybed: false,
             keybed_out: 0.0,
             pan_left: 0.0,
+            horizontal_bridge: HORIZONTAL_BRIDGE.get(),
             drive_index: 0,
             drive_frac: 0.0,
             pan_right: 0.0,
@@ -4271,7 +4274,7 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
         if pushing {
             self.push_in -= 1;
         }
-        let knob_horizontal_bridge = HORIZONTAL_BRIDGE.get();
+        let knob_horizontal_bridge = self.horizontal_bridge;
         // The tension the string is under RIGHT NOW, taken from the partials
         // that carry the energy.
         //
@@ -8161,7 +8164,15 @@ impl StringUnit {
         // nine atomic reads of knobs that cannot change inside it, once for
         // every partial it built.
         let horizontal_share = HORIZONTAL_SHARE.get() * (0.65 + 1.2 * powf(1.0 - position, 1.5));
-        let horizontal_bridge = HORIZONTAL_BRIDGE.get();
+        // In the upper scale the horizontal motion couples more weakly
+        // to the bridge. Taper its participation through the same port in
+        // both the force sum and reaction. The small floor keeps a link
+        // between polarizations even in the shortest strings.
+        let above = (f0 - 3.0 * BOARD_MEASURED_KNEE_HZ).max(0.0);
+        let relative = above / (0.19 * f0);
+        let squared = relative * relative;
+        let reach = squared / (1.0 + squared);
+        let horizontal_bridge = HORIZONTAL_BRIDGE.get() * (1.0 - 1.4 * reach).max(0.08);
         let unison_jitter_spread = UNISON_JITTER_SPREAD.get();
         let polarisation_cents = POLARISATION_CENTS.get();
         let prompt_measured_power = PROMPT_MEASURED_POWER.get();
@@ -8857,6 +8868,7 @@ impl StringUnit {
             unit_voice!(self, slot).clang_hold = clang_kick;
             unit_voice!(self, slot).clang_feed_decay =
                 expf(-1.0 / (IMPACT_PULSE_TAU_S.get() * sample_rate));
+            unit_voice!(self, slot).horizontal_bridge = horizontal_bridge;
             // The re-struck wire is full of fresh high partials again.
             unit_voice!(self, slot).longitudinal_upper = longitudinal_upper;
             unit_voice!(self, slot).upper_env = 1.0;
@@ -8870,6 +8882,7 @@ impl StringUnit {
         let voice = self.claim_voice(slot);
         voice.active = true;
         voice.note = note;
+        voice.horizontal_bridge = horizontal_bridge;
         voice.channel = channel;
         voice.held = true;
         voice.sustained = false;
@@ -18736,7 +18749,7 @@ mod bench {
     // board and restored upper free-string modes. See the listening profile.
     const RENDER_FINGERPRINT: u64 = 0x6682_df50_84f0_36c0;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0x6a6f_bcd1_d08e_48cf;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0xf52d_4a9b_c1f1_3fd5;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.
