@@ -19,7 +19,7 @@ cargo build --locked --release --target wasm32-unknown-unknown -p rackforge-conc
 Run tests with one thread: model knobs are process-wide atomics. The repository
 configures the required native stack and SIMD128/8 MiB WebAssembly stack.
 Native render fingerprints for the factory voicing are
-`6682df5084f036c0` and `f52d4a9bc1f13fd5`.
+`6682df5084f036c0` and `521b2a920d293944`.
 
 Optional tools:
 
@@ -91,6 +91,8 @@ The sympathetic resonance excited by a strike grows with the damper rail lift.
 At partial sustain it receives a fraction of the full-pedal excitation.
 The felt seats fully only at the end of the rail travel. Repeating a partial
 pedal position preserves the pending contact and pressure.
+The seated and partially lifted felt share a gradual reduction of lateral
+grip on the fundamental in the upper register.
 
 Research tools use `RACKFORGE_ROOT` for SDK/tool sources and keep generated
 renders, caches and external reference recordings under ignored `local/`.

@@ -2747,6 +2747,27 @@ const OUTPUT_TRIM_DB: f32 = 6.0;
 /// eight at C6, fifty-five at D#6.
 const DAMPER_HORIZONTAL_GRIP: f32 = 0.15;
 const DAMPER_HORIZONTAL_GRIP_BASS: f32 = 0.3;
+
+/// Effective reduction of the felt's lateral grip on the fundamental.
+/// The relief ramps up through the upper scale.
+const DAMPER_SIDEWAYS_RELIEF: f32 = 1.65;
+const DAMPER_SIDEWAYS_START: f32 = 0.65;
+
+fn damper_horizontal_factors(factor: f32, note: u8) -> (f32, f32) {
+    let position = (note.clamp(LOW_NOTE, LOW_NOTE + NOTE_COUNT as u8 - 1) - LOW_NOTE)
+        as f32 / (NOTE_COUNT - 1) as f32;
+    let exponent = DAMPER_HORIZONTAL_GRIP + DAMPER_HORIZONTAL_GRIP_BASS * (1.0 - position);
+    let ordinary = powf(factor, exponent);
+    let reach = ((position - DAMPER_SIDEWAYS_START) / (1.0 - DAMPER_SIDEWAYS_START))
+        .clamp(0.0, 1.0);
+    let relief = (DAMPER_SIDEWAYS_RELIEF * reach).clamp(0.0, 0.8);
+    let fundamental = if relief > 0.0 {
+        powf(factor, exponent * (1.0 - relief))
+    } else {
+        ordinary
+    };
+    (ordinary, fundamental)
+}
 /// The click in the key-off: the reference's 1-3 kHz sits thirty-three
 /// decibels under its 30-150, and the dark burst alone had it at
 /// fifty-five. A short bright burst on the voice's action-noise path, as
@@ -4831,17 +4852,17 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
         if self.damper_applied == 0.0 {
             self.rail_damper_factor = full_factor;
         }
-        let position = (self.note.clamp(LOW_NOTE, LOW_NOTE + NOTE_COUNT as u8 - 1) - LOW_NOTE)
-            as f32 / (NOTE_COUNT - 1) as f32;
         let vertical = powf(self.rail_damper_factor, delta);
-        let horizontal = powf(
-            vertical,
-            DAMPER_HORIZONTAL_GRIP + DAMPER_HORIZONTAL_GRIP_BASS * (1.0 - position),
-        );
+        let (horizontal, fundamental) = damper_horizontal_factors(vertical, self.note);
         for partial in &mut self.partials[..self.partial_count] {
+            let sideways_grip = if partial.slope.abs() == 1.0 / 16.0 {
+                fundamental
+            } else {
+                horizontal
+            };
             for lane in 0..LANES {
                 let factor = if lane == LANE_HORIZONTAL {
-                    horizontal
+                    sideways_grip
                 } else {
                     vertical
                 };
@@ -4937,17 +4958,16 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
         // other pitches, heard as "se apaga y luego se alza un release
         // latoso". The horizontal lane takes `DAMPER_HORIZONTAL_GRIP` of the
         // felt's grip, and the release is the note fading, as it is.
-        let position = (self.note.clamp(LOW_NOTE, LOW_NOTE + NOTE_COUNT as u8 - 1) - LOW_NOTE)
-            as f32
-            / (NOTE_COUNT - 1) as f32;
-        let sideways = powf(
-            factor,
-            DAMPER_HORIZONTAL_GRIP + DAMPER_HORIZONTAL_GRIP_BASS * (1.0 - position),
-        );
+        let (sideways, fundamental) = damper_horizontal_factors(factor, self.note);
         for partial in &mut self.partials[..self.partial_count] {
+            let sideways_grip = if partial.slope.abs() == 1.0 / 16.0 {
+                fundamental
+            } else {
+                sideways
+            };
             for lane in 0..LANES {
                 let grip = if lane == LANE_HORIZONTAL {
-                    sideways
+                    sideways_grip
                 } else {
                     factor
                 };
@@ -18749,7 +18769,7 @@ mod bench {
     // board and restored upper free-string modes. See the listening profile.
     const RENDER_FINGERPRINT: u64 = 0x6682_df50_84f0_36c0;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0xf52d_4a9b_c1f1_3fd5;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0x521b_2a92_0d29_3944;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.
