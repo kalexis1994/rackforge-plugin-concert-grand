@@ -4028,6 +4028,8 @@ struct Voice<const PARTIALS: usize = MAX_PARTIALS> {
     /// far, so a moving pedal presses or relieves only the DIFFERENCE. A
     /// relieved damper stops removing energy; it never gives any back.
     damper_applied: f32,
+    /// The pole factor used when the current rail pressure began.
+    rail_damper_factor: f32,
     /// The contact's ramp: a fresh voice fades in over ATTACK_RAMP_S from
     /// nothing, because the string is at rest when the hammer arrives and
     /// only reaches the state the integration hands over at the END of the
@@ -4175,6 +4177,7 @@ impl<const PARTIALS: usize> Default for Voice<PARTIALS> {
             undamped: false,
             sostenuto: false,
             damper_applied: 0.0,
+            rail_damper_factor: 1.0,
             onset: 1.0,
             onset_step: 0.0,
             firmness: 1.0,
@@ -4769,8 +4772,7 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
             }
             DAMPER_WAIT_PARTIAL => {
                 let pressure = self.damper_seat;
-                self.press_damper(self.damper_own, pressure);
-                self.damper_applied = pressure;
+                self.set_rail_pressure(self.damper_own, pressure);
                 self.damper_phase = 0;
             }
             _ => {}
@@ -4806,6 +4808,41 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
             self.noise_decay = thud_decay;
             self.noise_shrink = 1.0;
         }
+    }
+
+    /// Partial rail pressure scales the same directional grip as a fully
+    /// seated felt. Keep its reference while pressed, so lifting exactly
+    /// undoes the pole change without restoring already dissipated energy.
+    fn set_rail_pressure(&mut self, full_factor: f32, pressure: f32) {
+        let delta = pressure - self.damper_applied;
+        if delta.abs() < 1e-4 {
+            return;
+        }
+        if self.damper_applied == 0.0 {
+            self.rail_damper_factor = full_factor;
+        }
+        let position = (self.note.clamp(LOW_NOTE, LOW_NOTE + NOTE_COUNT as u8 - 1) - LOW_NOTE)
+            as f32 / (NOTE_COUNT - 1) as f32;
+        let vertical = powf(self.rail_damper_factor, delta);
+        let horizontal = powf(
+            vertical,
+            DAMPER_HORIZONTAL_GRIP + DAMPER_HORIZONTAL_GRIP_BASS * (1.0 - position),
+        );
+        for partial in &mut self.partials[..self.partial_count] {
+            for lane in 0..LANES {
+                let factor = if lane == LANE_HORIZONTAL {
+                    horizontal
+                } else {
+                    vertical
+                };
+                partial.rc[lane] *= factor;
+                partial.rs[lane] *= factor;
+            }
+            if delta < 0.0 {
+                partial.hold_inside_unit_circle(self.pole_ceiling);
+            }
+        }
+        self.damper_applied = pressure;
     }
 
     fn press_damper(&mut self, full_factor: f32, delta: f32) {
@@ -6972,9 +7009,7 @@ impl StringEngine {
             voice.cancel_damper();
             voice.held = false;
             voice.sustained = true;
-            voice.damper_applied = pressure;
-            let own = voice.damper_own;
-            voice.press_damper(own, pressure);
+            voice.set_rail_pressure(voice.damper_own, pressure);
         }
     }
 
@@ -7037,12 +7072,10 @@ impl StringEngine {
         let damper = Self::damper_for(voice.note, rate, grip * firmness, 1.0);
         if pressure >= 0.98 {
             // Seated: the legacy full damp, note over.
+            voice.set_rail_pressure(damper, 0.0);
             voice.damp(damper, thud.0, thud.1, release_gain * firmness);
-            voice.damper_applied = 0.0;
         } else {
-            let delta = pressure - voice.damper_applied;
-            voice.press_damper(damper, delta);
-            voice.damper_applied = pressure;
+            voice.set_rail_pressure(damper, pressure);
         }
     }
 
@@ -7400,8 +7433,6 @@ impl StringUnit {
         // milliseconds -- heard as "un pequeño popeo" that the thud fix did
         // not remove.
         let mut restrike_target: Option<usize> = None;
-        let rate = self.engine.sample_rate;
-        let grip = self.engine.controls.damper_grip();
         // The coordinator already chose: it sends a re-struck note back to
         // the string it is already on, and a fresh one to a slot it emptied.
         // So this asks only about the slot it was given -- which is all a
@@ -7424,9 +7455,7 @@ impl StringUnit {
                 // contact relieves a press that no longer stands.
                 voice.cancel_damper();
                 if voice.sustained && voice.damper_applied > 0.0 {
-                    let own = StringEngine::damper_for(note, rate, grip * voice.firmness, 1.0);
-                    voice.press_damper(own, -voice.damper_applied);
-                    voice.damper_applied = 0.0;
+                    voice.set_rail_pressure(1.0, 0.0);
                 }
                 restrike_target = Some(slot);
             }
@@ -9077,9 +9106,7 @@ impl StringUnit {
                         voice.damper_in = delay.max(1);
                         voice.damper_phase = DAMPER_WAIT_PARTIAL;
                         voice.damper_seat = pressure;
-                        // Use the same pole factor as later pedal moves.
-                        voice.damper_own =
-                            StringEngine::damper_for(note, rate, grip * voice.firmness, 1.0);
+                        voice.damper_own = damper;
                     }
                 } else {
                     // The felt is on its way, not down: see DAMPER_LAND_MS.
@@ -9174,12 +9201,11 @@ impl StringUnit {
             }
             if pedal && pressure < 0.98 {
                 let damper = StringEngine::damper_for(voice.note, rate, grip, 1.0);
-                voice.press_damper(damper, pressure - voice.damper_applied);
-                voice.damper_applied = pressure;
+                voice.set_rail_pressure(damper, pressure);
             } else {
                 let damper = StringEngine::damper_for(voice.note, rate, grip, 1.0);
+                voice.set_rail_pressure(damper, 0.0);
                 voice.damp(damper, thud_coefficient, thud_decay, release_gain);
-                voice.damper_applied = 0.0;
             }
         }
     }
@@ -9214,8 +9240,6 @@ impl StringUnit {
     /// section's voices. Whether anything was caught at all is the
     /// coordinator's to know, and it reads it before this runs.
     fn catch_voices(&mut self, channel: u8, note: u8) {
-        let rate = self.engine.sample_rate;
-        let grip = self.engine.controls.damper_grip();
         for slot in unit_slots() {
             let voice = &mut unit_voice!(self, slot);
             if !(voice.active && voice.note == note && voice.channel == channel) {
@@ -9225,9 +9249,7 @@ impl StringUnit {
                 voice.cancel_damper();
             }
             if voice.sustained && voice.damper_applied > 0.0 {
-                let own = StringEngine::damper_for(note, rate, grip * voice.firmness, 1.0);
-                voice.press_damper(own, -voice.damper_applied);
-                voice.damper_applied = 0.0;
+                voice.set_rail_pressure(1.0, 0.0);
             }
             voice.held = true;
             voice.sustained = false;
@@ -18627,7 +18649,7 @@ mod bench {
     // board and restored upper free-string modes. See the listening profile.
     const RENDER_FINGERPRINT: u64 = 0x3a11_23cb_1d7f_ff23;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0xa9c6_7000_fb61_7f1d;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0x19c7_880b_5450_9648;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.

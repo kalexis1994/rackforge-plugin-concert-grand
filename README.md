@@ -19,7 +19,7 @@ cargo build --locked --release --target wasm32-unknown-unknown -p rackforge-conc
 Run tests with one thread: model knobs are process-wide atomics. The repository
 configures the required native stack and SIMD128/8 MiB WebAssembly stack.
 Native render fingerprints for the factory voicing are
-`3a1123cb1d7fff23` and `a9c67000fb617f1d`.
+`3a1123cb1d7fff23` and `19c7880b54509648`.
 
 Optional tools:
 
@@ -71,6 +71,8 @@ remains moderated while C6 recovers its release tail.
 With partial sustain, a released key gives its felt time to reach the string
 before applying the pressure left by the rail. Pedal changes during that
 travel update the pending pressure.
+Partial pressure uses the same vertical and horizontal grip as a fully
+seated felt. The reference factor stays fixed until the pressure is released.
 
 Research tools use `RACKFORGE_ROOT` for SDK/tool sources and keep generated
 renders, caches and external reference recordings under ignored `local/`.
