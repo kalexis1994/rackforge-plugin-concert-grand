@@ -4098,7 +4098,8 @@ struct Voice<const PARTIALS: usize = MAX_PARTIALS> {
     /// Samples until the next audibility cull.
     cull_in: u32,
     /// Where the felt is after a key-up: 0 seated or lifted, 1 falling,
-    /// 2 in the air between bounces, 3 in a bounce's contact. See
+    /// 2 in the air between bounces, 3 in a bounce's contact, 4 waiting
+    /// for a partially lifted damper to seat. See
     /// `DAMPER_LAND_MS` and `advance_damper`.
     damper_phase: u8,
     /// Samples to the felt's next move.
@@ -4765,6 +4766,12 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
                 self.damper_pressed = true;
                 self.damper_phase = 3;
                 self.damper_in = self.damper_dwell;
+            }
+            DAMPER_WAIT_PARTIAL => {
+                let pressure = self.damper_seat;
+                self.press_damper(self.damper_own, pressure);
+                self.damper_applied = pressure;
+                self.damper_phase = 0;
             }
             _ => {}
         }
@@ -5992,6 +5999,7 @@ pub static DAMPER_RESTITUTION: Knob = Knob::new(0.5);
 /// How long each bounce's contact holds the string, in milliseconds. RF-Tines'
 /// felt was in contact for a tenth to a third of its bouncing.
 pub static DAMPER_DWELL_MS: Knob = Knob::new(1.0);
+const DAMPER_WAIT_PARTIAL: u8 = 4;
 
 /// How long a key takes to come all the way back up after a key-up at an
 /// unknown release speed, ms; the release speed scales it (`damper_span`).
@@ -7001,6 +7009,17 @@ impl StringEngine {
         }
         if sostenuto && voice.sostenuto {
             return;
+        }
+        if voice.damper_phase == DAMPER_WAIT_PARTIAL {
+            if pressure < 0.98 {
+                // Keep the latest rail position while the felt is falling.
+                voice.damper_seat = pressure;
+                if pressure <= 0.0 {
+                    voice.cancel_damper();
+                }
+                return;
+            }
+            voice.cancel_damper();
         }
         // The voice's own damper, not one drawn per pedal event. Drawn
         // per event, a press through a firm damper and its relief
@@ -9043,13 +9062,25 @@ impl StringUnit {
                     // the string with whatever weight the pedal leaves it.
                     voice.held = false;
                     voice.sustained = true;
-                    voice.damper_applied = pressure;
-                    // Through the voice's OWN damper: the half pedal will
-                    // relieve this press through the same one, and a press
-                    // through one damper relieved through another is the
-                    // energy walk `a_half_pedal_never_adds_energy` guards.
-                    let own = StringEngine::damper_for(note, rate, grip * voice.firmness, span);
-                    voice.press_damper(own, pressure);
+                    voice.damper_applied = 0.0;
+                    if pressure > 0.0 {
+                        // Use the same landing and settling times as the
+                        // unpedalled felt. A small rail lift changes its
+                        // pressure, not whether it has to travel.
+                        let mut delay = (DAMPER_LAND_MS.get() * 0.001 * rate * span) as u32;
+                        let mut hang = (DAMPER_HANG_MS.get() * 0.001 * rate).max(1.0);
+                        let dwell = ((DAMPER_DWELL_MS.get() * 0.001 * rate) as u32).max(1);
+                        for _ in 0..DAMPER_BOUNCES.get().clamp(0.0, 12.0) as u8 {
+                            delay += dwell + (hang as u32).max(1);
+                            hang *= DAMPER_RESTITUTION.get().clamp(0.0, 0.95);
+                        }
+                        voice.damper_in = delay.max(1);
+                        voice.damper_phase = DAMPER_WAIT_PARTIAL;
+                        voice.damper_seat = pressure;
+                        // Use the same pole factor as later pedal moves.
+                        voice.damper_own =
+                            StringEngine::damper_for(note, rate, grip * voice.firmness, 1.0);
+                    }
                 } else {
                     // The felt is on its way, not down: see DAMPER_LAND_MS.
                     // A key let go fast lands it sooner (`span` < 1), a key
@@ -18596,7 +18627,7 @@ mod bench {
     // board and restored upper free-string modes. See the listening profile.
     const RENDER_FINGERPRINT: u64 = 0x3a11_23cb_1d7f_ff23;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0x80b2_f8cd_8674_fdce;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0xa9c6_7000_fb61_7f1d;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.
