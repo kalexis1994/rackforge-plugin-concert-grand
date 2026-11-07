@@ -295,7 +295,7 @@
         "minimum": 0.0,
         "maximum": 1.0,
         "step": 0.01,
-        "default": 0.49
+        "default": 0.51
       }
     },
     {
@@ -1394,7 +1394,7 @@
         "minimum": 0.2125,
         "maximum": 54.4,
         "step": 0.034,
-        "default": 3.4,
+        "default": 2.55,
         "taper": "logarithmic"
       },
       "flags": {
@@ -2291,7 +2291,7 @@
         "minimum": 0.140625,
         "maximum": 36.0,
         "step": 0.0224,
-        "default": 2.25,
+        "default": 1.125,
         "taper": "logarithmic"
       },
       "flags": {
@@ -3988,7 +3988,7 @@
         "minimum": 0.0,
         "maximum": 1.0,
         "step": 0.0001,
-        "default": 0.0
+        "default": 0.004
       },
       "flags": {
         "automatable": true,

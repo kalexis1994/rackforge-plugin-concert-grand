@@ -18,7 +18,8 @@ cargo build --locked --release --target wasm32-unknown-unknown -p rackforge-conc
 
 Run tests with one thread: model knobs are process-wide atomics. The repository
 configures the required native stack and SIMD128/8 MiB WebAssembly stack.
-Native render fingerprints remain `e4abcfd02a5757c1` and `dfb7f193962235e0`.
+Native render fingerprints for the factory voicing are
+`4ac6dcc179598db3` and `ecd67c2f8052c1c7`.
 
 Optional tools:
 
@@ -53,10 +54,13 @@ immutable: any change gets a new package version and a new host pin.
 
 ## Listening profile
 
-The accepted Nocturne and Campanella renders use Concert, 44.1 kHz, 256 frames,
-and public parameter 192 (`MERGE_RAMP_S`) set to **0.004 s**. The compiled default
-remains zero for existing state compatibility. The deployment saves and restores
-the explicit profile; see `docs/concert-grand-pi-2026-10-14`.
+The accepted version C renders of the Nocturne and La Campanella use Concert,
+44.1 kHz and blocks of 256 frames. The factory voicing uses `RADIATION_RATE=2.55`,
+`MERGE_RAMP_S=0.004` seconds and Hammer Hard at `0.51`. It also halves the
+gain of the free-string bank (`UNDAMPED_MIX=1.125`) to moderate the bell-like
+ring heard on G4. The model knobs share these defaults across the factory
+bank. Each preset inherits Hammer Hard from Concert unless it sets its own
+value, as Player Upright does. Existing states keep their saved settings.
 
 Research tools use `RACKFORGE_ROOT` for SDK/tool sources and keep generated
 renders, caches and external reference recordings under ignored `local/`.

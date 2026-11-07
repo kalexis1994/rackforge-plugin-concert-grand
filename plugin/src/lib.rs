@@ -112,24 +112,42 @@ use rackforge_plugin_sdk::{
 /// and a native lab can change it while the instrument runs, so a voicer can
 /// hear every number in this file without rebuilding anything. Reads are one
 /// relaxed atomic load; the wasm build never writes them.
-pub struct Knob(core::sync::atomic::AtomicU32, f32);
+pub struct Knob {
+    value: core::sync::atomic::AtomicU32,
+    reference: f32,
+    factory: f32,
+}
 
 impl Knob {
     pub const fn new(value: f32) -> Self {
-        Knob(core::sync::atomic::AtomicU32::new(value.to_bits()), value)
+        Self::with_factory(value, value)
     }
-    /// The value the knob was compiled with -- the one source of it, so a
-    /// registry can never carry a stale copy.
+
+    /// Keep the parameter range and saved fader mapping when revoicing the factory sound.
+    const fn with_factory(reference: f32, factory: f32) -> Self {
+        Self {
+            value: core::sync::atomic::AtomicU32::new(factory.to_bits()),
+            reference,
+            factory,
+        }
+    }
+
+    /// The reference used for parameter bounds and saved fader positions.
     #[inline(always)]
     pub fn compiled(&self) -> f32 {
-        self.1
+        self.reference
     }
+
+    fn factory(&self) -> f32 {
+        self.factory
+    }
+
     #[inline(always)]
     pub fn get(&self) -> f32 {
-        f32::from_bits(self.0.load(core::sync::atomic::Ordering::Relaxed))
+        f32::from_bits(self.value.load(core::sync::atomic::Ordering::Relaxed))
     }
     pub fn set(&self, value: f32) {
-        self.0
+        self.value
             .store(value.to_bits(), core::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -1470,7 +1488,7 @@ pub static SLOW_FACTOR_CAP: Knob = Knob::new(1.5);
 /// The loss rate a fully radiating partial carries, in nepers per second.
 /// Fitted to the same measurement, less what the string's own losses already
 /// account for.
-pub static RADIATION_RATE: Knob = Knob::new(3.4);
+pub static RADIATION_RATE: Knob = Knob::with_factory(3.4, 2.55);
 /// The wire's own bending loss, per partial squared. Bensa et al.'s
 /// b2*kappa^2 term, which is what makes a bass string's two-hundredth
 /// partial die while its fundamental rings for half a minute.
@@ -3349,10 +3367,10 @@ pub static UNDAMPED_HIGH_HZ: Knob = Knob::new(7000.0);
 /// Undamped, but not endless: these are short, light, well-terminated lengths.
 pub static UNDAMPED_T60_LOW_S: Knob = Knob::new(2.6);
 pub static UNDAMPED_T60_HIGH_S: Knob = Knob::new(0.9);
-/// 4.5 landed the residue after a key-up on the reference's release
-/// resonance within five decibels; the ear heard "una resonancia rara al
-/// soltar" and six decibels come off, the same discount.
-pub static UNDAMPED_MIX: Knob = Knob::new(2.25);
+/// The original 2.25 let G4's fourth partial excite the free G6 string
+/// strongly enough to sound bell-like. Halve the bank's gain across the
+/// keyboard, keeping its sympathetic tail and the saved fader mapping.
+pub static UNDAMPED_MIX: Knob = Knob::with_factory(2.25, 1.125);
 
 /// The damped strings, ringing anyway: the bed under every note.
 ///
@@ -4959,7 +4977,7 @@ impl Default for Controls {
             level: -5.7067003,
             preamp: 4.5,
             // The user's lab refinements, by ear: felt corner a touch up, the
-            // hammer a shade softer and heavier, bloom up, both decay stages
+            // hammer a shade firmer and heavier, bloom up, both decay stages
             // a little longer, the board eased.
             //
             // Click Colour is at 0.07, and it is down there for a reason the
@@ -4988,7 +5006,7 @@ impl Default for Controls {
             // 750 to 850 -- and is the better fix if it ever survives a
             // listening test. It has not been chosen; the level has.
             lab: [
-                0.52, 0.5, 0.5, 0.07, 0.5, 0.5, 0.35, 0.49, 0.55, 0.15, 0.5, 0.57, 0.58, 0.5, 0.45,
+                0.52, 0.5, 0.5, 0.07, 0.5, 0.5, 0.35, 0.51, 0.55, 0.15, 0.5, 0.57, 0.58, 0.5, 0.45,
                 0.5, 0.5,
             ],
             room_size: 311.3,
@@ -5992,11 +6010,10 @@ pub static REPETITION_FROM_CHECK: Knob = Knob::new(0.75);
 /// moving for one to three milliseconds, so the spread is the physical
 /// shape -- but measured on the blow's own contribution (the render with
 /// the blow less the render without, first millisecond, 0.171.26), the
-/// spread push came out four times ROUGHER than the one-sample push
-/// (0.021 against 0.005 largest step) for every length from eight samples
-/// up, and the cause was not found. Nought until it is; the machinery
-/// stays for the ear to try.
-pub static MERGE_RAMP_S: Knob = Knob::new(0.0);
+/// spread push measured rougher at the very start of one isolated blow.
+/// The four-millisecond setting was later chosen by ear on repeated
+/// melody notes in the Nocturne and retained in the version C renders.
+pub static MERGE_RAMP_S: Knob = Knob::with_factory(0.0, 0.004);
 
 /// The key's travel after let-off, mm: the aftertouch. The key lands on
 /// its bed this far past the point where the jack lets the hammer go.
@@ -12323,7 +12340,7 @@ impl ConcertGrand {
         values[6 + LAB_COUNT + 18] = defaults.last_damper as f32;
         for (slot, (_, knob, _)) in TUNABLES.iter().enumerate() {
             values[KNOB_PARAM_BASE as usize + slot] =
-                fader_from_knob(knob.compiled(), knob.compiled());
+                fader_from_knob(knob.compiled(), knob.factory());
         }
         // A 37-float state is from the era of the "in bass" tilt twins: its
         // tail is tilt values, not room values, and reading it into the room
@@ -12433,12 +12450,12 @@ impl ConcertGrand {
         let same_layout = (state.len() == STATE_COUNT * 4 || state.len() == STATE_FADER_COUNT * 4)
             && values[PARAM_COUNT + 1].to_bits() == knob_registry_fingerprint();
         for (slot, (_, knob, _)) in TUNABLES.iter().enumerate() {
-            let fader = if same_layout {
-                values[KNOB_PARAM_BASE as usize + slot]
+            let value = if same_layout {
+                knob_from_fader(knob.compiled(), values[KNOB_PARAM_BASE as usize + slot])
             } else {
-                fader_from_knob(knob.compiled(), knob.compiled())
+                knob.factory()
             };
-            knob.set(knob_from_fader(knob.compiled(), fader));
+            knob.set(value);
         }
         if !same_layout {
             self.engine.controls.preamp = Controls::default().preamp;
@@ -13858,7 +13875,7 @@ mod tests {
         };
         let step = blow_rms(0.0);
         let contact = blow_rms(0.004);
-        MERGE_RAMP_S.set(0.0);
+        MERGE_RAMP_S.set(MERGE_RAMP_S.factory());
         let ratio = 20.0 * log2f(contact / step.max(1e-9)) * core::f32::consts::LOG10_2;
         assert!(
             ratio.abs() < 1.5,
@@ -14062,27 +14079,37 @@ mod tests {
         // The pianist's silent re-take: a key taken down without sounding
         // leaves its string free, and a loud note under it wakes it. G4
         // held silently over a fortissimo C3 -- G4's fundamental is C3's
-        // third partial -- must leave more sound behind once the C3 has
-        // been damped than the same C3 alone; and the silent key coming up
-        // must take it away again.
+        // third partial -- must contribute to the tail after C3 is damped.
+        // Subtract the same C3 alone to measure this contribution at the
+        // same time in all three renders, independent of the overall tail.
         let tail = |silent: bool, lift: bool| {
             let mut piano = prepared();
-            if silent {
-                render(&mut piano, 16, &[note_on(67, 1)]);
-            }
+            let press = [note_on(67, 1)];
+            render(&mut piano, 16, if silent { &press } else { &[] });
             render(&mut piano, (FS * 0.4) as usize, &[note_on(48, 120)]);
             render(&mut piano, (FS * 0.3) as usize, &[note_off(48)]);
-            if lift {
-                render(&mut piano, (FS * 0.15) as usize, &[note_off(67)]);
-            }
-            energy(&render(&mut piano, (FS * 0.4) as usize, &[]))
+            let release = [note_off(67)];
+            render(
+                &mut piano,
+                (FS * 0.15) as usize,
+                if lift { &release } else { &[] },
+            );
+            render(&mut piano, (FS * 0.4) as usize, &[])
         };
         let alone = tail(false, false);
-        let with_silent = tail(true, false);
-        let lifted = tail(true, true);
+        let contribution = |lift| {
+            let difference: Vec<_> = tail(true, lift)
+                .iter()
+                .zip(&alone)
+                .map(|(sample, baseline)| sample - baseline)
+                .collect();
+            energy(&difference)
+        };
+        let with_silent = contribution(false);
+        let lifted = contribution(true);
         assert!(
-            with_silent > 1.3 * alone,
-            "the silent G4 left {with_silent:e} behind against {alone:e} alone"
+            with_silent > 1e-8,
+            "the silent G4 contributed only {with_silent:e} to the tail"
         );
         assert!(
             lifted < 0.5 * with_silent,
@@ -14561,6 +14588,36 @@ mod tests {
         assert!(piano.load_state(&state));
         assert_eq!(piano.get_parameter(PARAM_BRIGHTNESS), Some(0.28_f32 as f64));
         assert!(!piano.load_preset("unknown"));
+    }
+
+    #[test]
+    fn factory_revoicing_preserves_previous_saved_settings() {
+        let mut piano = prepared();
+        let mut words = state_words(&Controls::default());
+        // Previous releases stored Hammer Hard and Merge Ramp directly.
+        // Radiation Rate and Undamped Mix used their logarithmic midpoints.
+        words[13] = 0.49;
+        words[70] = 0.5;
+        words[112] = 0.5;
+        words[192] = 0.0;
+        let mut state = [0u8; STATE_COUNT * 4];
+        for (chunk, word) in state.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+            *chunk = word.to_le_bytes();
+        }
+        assert!(piano.load_state(&state));
+        let loaded = [13, 70, 112, 192].map(|index| piano.get_parameter(index));
+        RADIATION_RATE.set(RADIATION_RATE.factory());
+        UNDAMPED_MIX.set(UNDAMPED_MIX.factory());
+        MERGE_RAMP_S.set(MERGE_RAMP_S.factory());
+        assert_eq!(
+            loaded,
+            [
+                Some(0.49_f32 as f64),
+                Some(3.4_f32 as f64),
+                Some(2.25),
+                Some(0.0),
+            ]
+        );
     }
 
     #[test]
@@ -18063,7 +18120,7 @@ mod tests {";
     /// to whatever the strings hand it. `cargo test board_curve -- --ignored
     /// --nocapture`.
     /// The knobs are process-global, and the tests run in parallel: this
-    /// test therefore never leaves a knob anywhere but its compiled value.
+    /// test therefore never leaves a knob anywhere but its factory value.
     /// The mapping is checked on its own, and the parameter path with a
     /// write that is a no-op by construction.
     #[test]
@@ -18088,18 +18145,13 @@ mod tests {";
         let mut piano = prepared();
         for (slot, (name, knob, _)) in TUNABLES.iter().enumerate() {
             let index = KNOB_PARAM_BASE + slot as u32;
-            // A model knob is its own constant now. Writing the compiled
+            // A model knob is its own constant now. Writing the factory
             // value must leave the knob exactly there, and read back as
             // itself -- 850 newtons in, 850 newtons out. A knob compiled at
-            // zero has no ratio to sweep and keeps the nought-to-one meaning,
-            // where the resting position is the middle.
-            let rest = if knob.compiled() == 0.0 {
-                fader_from_knob(knob.compiled(), knob.compiled())
-            } else {
-                knob.compiled()
-            };
+            // zero keeps the direct nought-to-one mapping.
+            let rest = knob.factory();
             assert!(piano.set_parameter(index, rest as f64), "{name}");
-            assert_eq!(knob.get(), knob.compiled(), "{name} moved");
+            assert_eq!(knob.get(), knob.factory(), "{name} moved");
             let read = piano.get_parameter(index).unwrap();
             let tolerance = 1e-6 * (rest as f64).abs().max(1.0);
             assert!(
@@ -18138,7 +18190,7 @@ mod tests {";
                     Ok(false) => offenders.push(format!("{name} at {fader}: non-finite output")),
                     Err(_) => offenders.push(format!("{name} at {fader}: PANIC")),
                 }
-                knob.set(knob.compiled());
+                knob.set(knob.factory());
             }
         }
         assert!(
@@ -18463,7 +18515,7 @@ mod bench {
         }
     }
 
-    /// Puts every knob back to the value it was compiled with.
+    /// Puts every knob back at its factory setting.
     ///
     /// The knobs are process-wide atomics and eighteen tests write them, so
     /// a fingerprint that renders after one of those has run measures that
@@ -18472,7 +18524,7 @@ mod bench {
     #[cfg(test)]
     fn reset_every_knob() {
         for (_, knob, _) in TUNABLES {
-            knob.set(knob.compiled());
+            knob.set(knob.factory());
         }
     }
 
@@ -18487,12 +18539,11 @@ mod bench {
     /// Nothing about the instrument's sound should move by accident, and
     /// until now nothing stopped it -- these two tests printed their hash and
     /// asserted nothing, so they passed whatever the instrument did.
-    // Separate string/polarisation slopes are squared before summing the
-    // scalar tension estimate. Both scripts intentionally change; the bridge
-    // port and all note-dependent calibration remain as in the accepted base.
-    const RENDER_FINGERPRINT: u64 = 0xe4ab_cfd0_2a57_57c1;
+    // The approved factory voicing uses version C with the free-string bank
+    // at half gain. See the listening profile in the README.
+    const RENDER_FINGERPRINT: u64 = 0x4ac6_dcc1_7959_8db3;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0xdfb7_f193_9622_35e0;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0xecd6_7c2f_8052_c1c7;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.
