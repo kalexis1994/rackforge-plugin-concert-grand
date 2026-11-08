@@ -1,7 +1,7 @@
 # RackForge Concert Grand
 
 Physically modelled piano, distributed as an independent RackForge plugin.
-Current package: **0.171.37**, ID `org.rackforge.concert-grand`.
+Current package: **0.171.38**, ID `org.rackforge.concert-grand`.
 
 The DSP, Web interface, programs, artwork, model tests, render tools and
 laboratory reports belong here. RackForge owns the portable SDK and host;
@@ -19,7 +19,7 @@ cargo build --locked --release --target wasm32-unknown-unknown -p rackforge-conc
 Run tests with one thread: model knobs are process-wide atomics. The repository
 configures the required native stack and SIMD128/8 MiB WebAssembly stack.
 Native render fingerprints for the factory voicing are
-`5af465a8de7641d3` and `527e9aefea1cf737`.
+`f105af1e1b782b8c` and `4e07a9e9dc3057a5`.
 
 Optional tools:
 
@@ -62,6 +62,12 @@ ring heard on G4. The model knobs share these defaults across the factory
 bank. Each preset inherits Hammer Hard from Concert unless it sets its own
 value, as Player Upright does. Existing states keep their saved settings.
 
+The hammer impact also drives two short-decay low bands through the action
+supports. The extra support gain tapers smoothly with shorter speaking
+lengths.
+The soundboard, lid and early room reflections share one stereo pair aimed
+through the open side of the lid, shifted 7.5 cm toward the treble.
+
 The latest listening profile smooths modal overlap and bridge-position contrast
 through the middle of the soundboard, uses weighted unison leverage at the
 bridge, and progressively restores the higher free-string modes. The gain
@@ -99,3 +105,23 @@ grip on the fundamental in the upper register.
 Research tools use `RACKFORGE_ROOT` for SDK/tool sources and keep generated
 renders, caches and external reference recordings under ignored `local/`.
 Historical JSON measurements keep their original absolute paths and hashes.
+
+## Moving-string contact experiment
+
+The optional `moving-string-contact` feature keeps mechanical modal coordinates
+alongside the voiced audio states. On a repeated strike, the contact solver
+reads the mean vertical motion of the unison and returns only the new forced
+response. The freely ringing state is not added a second time. The existing
+bridge, detuning, damping and momentum ramp also advance the mechanical state.
+
+```sh
+cargo test --locked --release -p rackforge-concert-grand --lib --features moving-string-contact -- --test-threads=1
+```
+
+This is a listening candidate, disabled by default. It preserves the calibrated
+fresh strike and changes repeated strikes only where the existing modal contact
+solver is used; the upper-register analytic fallback is unchanged. The solver
+still uses an equivalent unison string, rather than three independent contacts.
+It costs extra mechanical-state rotations and a second contact integration on
+repeated notes. The 2026-11-06 comparison under ignored `local/` contains the
+reference and candidate executables, source events, raw renders and measurements.

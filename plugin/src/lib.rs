@@ -1836,6 +1836,19 @@ const LANE_BLOOM: usize = 4;
 /// Relative bridge leverage of the outer strings in a unison.
 const BRIDGE_LEVER: f32 = -0.60;
 
+/// Mechanical coordinates, in metres and velocity/omega. Audio amplitudes
+/// cannot substitute for these: each strike has its own voicing gain.
+/// Only real string lanes participate; the onset bloom is not a string.
+#[cfg(feature = "moving-string-contact")]
+#[derive(Clone, Copy, Default)]
+struct ContactMotion {
+    s: [f32; 4],
+    c: [f32; 4],
+    push_s: [f32; 4],
+    push_c: [f32; 4],
+    metres_per_unit: f32,
+}
+
 #[derive(Clone, Copy, Default)]
 struct Partial {
     /// Lane-wise (structure-of-arrays) storage of the five components.
@@ -1878,6 +1891,8 @@ struct Partial {
     /// have had. See `MERGE_RAMP_S`.
     push: [f32; LANES],
     push_s: [f32; LANES],
+    #[cfg(feature = "moving-string-contact")]
+    motion: ContactMotion,
 }
 
 impl Partial {
@@ -1914,6 +1929,46 @@ impl Partial {
         self.c[lane] = 0.0;
         self.rc[lane] = 0.0;
         self.rs[lane] = 0.0;
+        #[cfg(feature = "moving-string-contact")]
+        if lane < 4 {
+            self.motion.s[lane] = 0.0;
+            self.motion.c[lane] = 0.0;
+            self.motion.push_s[lane] = 0.0;
+            self.motion.push_c[lane] = 0.0;
+        }
+    }
+
+    #[cfg(feature = "moving-string-contact")]
+    fn tick_contact_motion(&mut self, horizontal: f32, pushing: bool, sympathy: f32) {
+        if self.motion.metres_per_unit == 0.0 {
+            return;
+        }
+        let motion = &mut self.motion;
+        motion.s[0] += sympathy * self.coupling * motion.metres_per_unit;
+        for lane in 0..4 {
+            if pushing {
+                let (s, c) = (motion.push_s[lane], motion.push_c[lane]);
+                motion.s[lane] += s;
+                motion.c[lane] += c;
+                motion.push_s[lane] = s * self.rc[lane] + c * self.rs[lane];
+                motion.push_c[lane] = c * self.rc[lane] - s * self.rs[lane];
+            }
+            let (s, c) = (motion.s[lane], motion.c[lane]);
+            motion.s[lane] = s * self.rc[lane] + c * self.rs[lane];
+            motion.c[lane] = c * self.rc[lane] - s * self.rs[lane];
+        }
+        if self.drain > 0.0 {
+            let take_s =
+                self.drain * (motion.s[0] + motion.s[1] + motion.s[2] + horizontal * motion.s[3]);
+            let take_c =
+                self.drain * (motion.c[0] + motion.c[1] + motion.c[2] + horizontal * motion.c[3]);
+            for lane in 0..3 {
+                motion.s[lane] -= self.bridge_vertical[lane] * take_s;
+                motion.c[lane] -= self.bridge_vertical[lane] * take_c;
+            }
+            motion.s[3] -= horizontal * take_s;
+            motion.c[3] -= horizontal * take_c;
+        }
     }
 
     /// One sample: rotates all five lanes -- straight-line, branch-free,
@@ -2084,6 +2139,7 @@ struct BoardMode {
     /// hundreds of modes was a +15 dB shelf under the bass). See `BOARD_PAIR`.
     out_y: [f32; 2],
     out_y1: [f32; 2],
+    room_y: [f32; 2],
     v1: f32,
 }
 
@@ -2145,6 +2201,54 @@ impl BodyMode {
     }
 }
 
+// Parallel capsules on a bar looking in through the open side of the lid.
+// Positions are relative to the bridge midpoint, in the room's coordinate axes.
+#[derive(Clone, Copy)]
+struct RecordingCapsule {
+    x: f32,
+    y: f32,
+    z: f32,
+    axis: (f32, f32, f32),
+}
+
+const CAPTURE_REFERENCE_M: f32 = 0.6598;
+const CAPTURE_AIM_Y: f32 = 0.948_683_3;
+const CAPTURE_AIM_Z: f32 = 0.316_227_76;
+
+const CAPTURE_BRIDGE_OFFSET_M: f32 = 0.075;
+const CAPTURE_REFERENCE_WIDTH: f32 = 0.35;
+
+impl RecordingCapsule {
+    fn pair(distance: f32, offset: f32, width: f32) -> [Self; 2] {
+        let azimuth = MIC_AZIMUTH_RAD.get() - MIC_AZIMUTH_RAD.compiled();
+        let (sin, cos) = sincosf(azimuth);
+        let height = MIC_HEIGHT_M.get() / MIC_HEIGHT_M.compiled();
+        let tilt = (CAPTURE_AIM_Z * height).clamp(0.0, 0.95);
+        let horizontal = if height == 1.0 {
+            CAPTURE_AIM_Y
+        } else {
+            sqrtf(1.0 - tilt * tilt)
+        };
+        let axis = (-horizontal * sin, horizontal * cos, -tilt);
+        let half = 0.5 * MIC_SPACING_M.get() * (width / CAPTURE_REFERENCE_WIDTH);
+        [-half, half].map(|x| Self {
+            x: x + offset - distance * axis.0,
+            y: -distance * axis.1,
+            z: -distance * axis.2,
+            axis,
+        })
+    }
+
+    fn path(self, point: (f32, f32, f32), pattern: f32) -> (f32, f32) {
+        let dx = point.0 - self.x;
+        let dy = point.1 - self.y;
+        let dz = point.2 - self.z;
+        let range = sqrtf(dx * dx + dy * dy + dz * dz).max(1e-3);
+        let projection = self.axis.0 * dx + self.axis.1 * dy + self.axis.2 * dz;
+        (range, (1.0 - pattern) + pattern * projection / range)
+    }
+}
+
 impl BoardMode {
     /// The same resonator as `BodyMode::tune`, plus the build-time half the
     /// render thread never reads. The capsule outputs start at the pan, which
@@ -2169,6 +2273,7 @@ impl BoardMode {
                 shape_c: 0.0,
                 out_y: [1.0 - pan, pan],
                 out_y1: [0.0, 0.0],
+                room_y: [1.0, 0.0],
                 v1: 0.0,
             },
             BoardCold {
@@ -2185,21 +2290,22 @@ impl BoardMode {
     /// One sample into the pair: the mode's state advances and each
     /// capsule reads its own level and phase of it.
     #[inline(always)]
-    fn tick_pair(&mut self, input: f32) -> (f32, f32) {
+    fn tick_pair(&mut self, input: f32) -> (f32, f32, f32) {
         let y = self.a1 * self.y1 + self.a2 * self.y2 + self.drive * input;
         let v = (y - self.y1) * self.velocity;
         let left = v * self.out_y[0] + self.v1 * self.out_y1[0];
         let right = v * self.out_y[1] + self.v1 * self.out_y1[1];
+        let room = v * self.room_y[0] + self.v1 * self.room_y[1];
         self.y2 = self.y1;
         self.y1 = y;
         self.v1 = v;
-        (left, right)
+        (left, right, room)
     }
 
     /// Sets the capsule outputs from complex gains: `gain` is what the
     /// capsule hears of the mode's unit velocity at the mode's frequency.
     /// `omega` comes from `BoardCold`, which is where it lives now.
-    fn set_pair(&mut self, gains: [(f32, f32); 2], omega: f32) {
+    fn set_pair(&mut self, gains: [(f32, f32); 2], room: (f32, f32), omega: f32) {
         let (sin_w, cos_w) = sincosf(omega);
         let sin_w = if sin_w.abs() < 1e-4 { 1e-4 } else { sin_w };
         for (m, (re, im)) in gains.iter().copied().enumerate() {
@@ -2212,6 +2318,7 @@ impl BoardMode {
             self.out_y[m] = magnitude * (cos_psi - sin_psi * cos_w / sin_w);
             self.out_y1[m] = magnitude * sin_psi / sin_w;
         }
+        self.room_y = [room.0 - room.1 * cos_w / sin_w, room.1 / sin_w];
     }
 
     /// The bank driven mono, for tests that compare it against a
@@ -2655,6 +2762,123 @@ const THUMP_CORNER_HZ: f32 = 260.0;
 /// `THUMP_CORNER_HZ` at A0 to this at C8, log-linear in position; the
 /// 30-300 Hz level, which the ear set, does not move with it.
 const THUMP_CORNER_TOP_HZ: f32 = 1400.0;
+/// The keybed radiates the lower part of the impact more strongly. Keep the
+/// bass corner and limit the rise in the brighter strikes.
+const THUMP_BODY_LIMIT_HZ: f32 = 420.0;
+
+// The upper and lower action bands each feed three positions along the bridge.
+const ACTION_SUPPORT_OFFSETS: [f32; 6] = [0.0, -5.0, 3.0, 0.0, -2.0, 3.0];
+const ACTION_SUPPORT_WEIGHTS: [f32; 6] = [-25.0, -11.705, -16.555, -6.538, 2.648, -12.935];
+
+#[derive(Clone, Copy, Default)]
+struct BridgeAttackBand {
+    gain: f32,
+    decay: f32,
+    b: f32,
+    a1: f32,
+    a2: f32,
+    state: [[f32; 2]; 2],
+}
+
+#[derive(Clone, Copy, Default)]
+struct RadiationBand {
+    b: [f32; 3],
+    a: [f32; 2],
+    state: [[f32; 2]; 2],
+}
+
+const RADIATION_BAND_CENTERS: [f32; 2] = [3_260.0, 5_200.0];
+
+impl RadiationBand {
+    fn tune(center: f32, rate: f32) -> Self {
+        if center >= 0.5 * rate {
+            return Self {
+                b: [1.0, 0.0, 0.0],
+                ..Self::default()
+            };
+        }
+        // Two overlapping peaking sections soften the presence band with
+        // minimum phase and no lookahead.
+        let gain = powf(10.0, -4.2 / 40.0);
+        let (sin, cos) = sincosf(core::f32::consts::TAU * center / rate);
+        let alpha = sin / (2.0 * 1.4);
+        let a0 = 1.0 + alpha / gain;
+        let middle = -2.0 * cos / a0;
+        Self {
+            b: [(1.0 + alpha * gain) / a0, middle, (1.0 - alpha * gain) / a0],
+            a: [middle, (1.0 - alpha / gain) / a0],
+            state: [[0.0; 2]; 2],
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, input: [f32; 2]) -> [f32; 2] {
+        core::array::from_fn(|channel| {
+            let x = input[channel];
+            let state = &mut self.state[channel];
+            let y = self.b[0] * x + state[0];
+            state[0] = self.b[1] * x - self.a[0] * y + state[1];
+            state[1] = self.b[2] * x - self.a[1] * y;
+            y
+        })
+    }
+}
+
+impl BridgeAttackBand {
+    fn new(center: f32, q: f32, gain: f32, decay: f32, sample_rate: f32) -> Self {
+        if gain <= 0.0 || center >= 0.5 * sample_rate {
+            return Self::default();
+        }
+        let (sin, cos) = sincosf(core::f32::consts::TAU * center / sample_rate);
+        let alpha = sin / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        Self {
+            gain,
+            decay,
+            b: alpha / a0,
+            a1: -2.0 * cos / a0,
+            a2: (1.0 - alpha) / a0,
+            state: [[0.0; 2]; 2],
+        }
+    }
+
+    fn from_impact(thump: f32, impact: f32, rate: f32, speaking_length: f32) -> [Self; 2] {
+        if thump <= 1e-7 {
+            return [Self::default(); 2];
+        }
+        // The existing knock carries its legacy voicing gain. Divide that
+        // gain out of this parallel path so the shared impact law sets its
+        // strength and the bridge and board set the radiation.
+        let force = impact / thump;
+        // The added support gain recedes smoothly on shorter strings.
+        let length_ratio = speaking_length / 0.19;
+        let square = length_ratio * length_ratio;
+        let share = 1.0 - 0.8 / (1.0 + square * square);
+        let gain = force * (1.0 + (4.4 - 1.0) * share);
+        let decay = expf(-1.0 / (0.017 * rate));
+        [
+            Self::new(195.2, core::f32::consts::SQRT_2, gain, decay, rate),
+            Self::new(112.5, 1.05, gain, decay, rate),
+        ]
+    }
+
+    #[inline]
+    fn tick(&mut self, mut sample: f32) -> f32 {
+        if self.gain <= 1e-5 {
+            return 0.0;
+        }
+        for state in &mut self.state {
+            let y = self.b * sample + state[0];
+            state[0] = state[1] - self.a1 * y;
+            state[1] = -self.b * sample - self.a2 * y;
+            sample = y;
+        }
+        let shaped = self.gain * sample;
+        self.gain *= self.decay;
+        shaped
+    }
+}
+
 /// And the knock climbs in level over the top half of the compass, on top
 /// of `THUMP_RISE_DB` (which stops at C4): measured, the reference's knock
 /// under a C6 stands at -7 dB against the note's strongest partial at
@@ -3570,7 +3794,6 @@ pub static MIC_SPACING_M: Knob = Knob::new(0.17);
 /// gets no wetter -- they do. But that is a mic-distance decision the player
 /// makes on the fader, not something a refactor should decide for them.)
 pub static MIC_PREAMP: Knob = Knob::new(1.57);
-const MIC_HALF_ANGLE_RAD: f32 = 0.959_931; // 55 degrees, so 110 between them
 pub static PROXIMITY_STRENGTH: Knob = Knob::new(0.35);
 /// The spaced pair's maximum spacing in metres (Width at full), and how far
 /// the piano's strings spread laterally as the pair sees them. A coincident
@@ -4036,6 +4259,7 @@ struct VoiceFrame {
     force: f32,
     drive_index: usize,
     drive_frac: f32,
+    action_force: [f32; 6],
     culled: usize,
 }
 
@@ -4077,6 +4301,12 @@ struct Voice<const PARTIALS: usize = MAX_PARTIALS> {
     pole_ceiling: f32,
     partials: [Partial; PARTIALS],
     partial_count: usize,
+    /// Extra loss in the radiated low overtones while the attack settles.
+    attack_cut: f32,
+    attack_target: f32,
+    attack_left: f32,
+    attack_step: f32,
+    attack_follow: f32,
     /// Hammer/soundboard thump: a decaying low-passed noise burst whose
     /// bandwidth contracts as it fades, like a tapped soundboard's.
     noise_amp: f32,
@@ -4109,6 +4339,8 @@ struct Voice<const PARTIALS: usize = MAX_PARTIALS> {
     thump_floor: f32,
     thump_c0: f32,
     thump_seed: u32,
+    bridge_attack: [BridgeAttackBand; 2],
+    action_force: [f32; 6],
     /// The burst is the keyboard's, not the string's: it leaves through
     /// `keybed_out` instead of the sum that drives the bridge.
     thump_keybed: bool,
@@ -4216,6 +4448,11 @@ impl<const PARTIALS: usize> Default for Voice<PARTIALS> {
             pole_ceiling: pole_ceiling(48_000.0),
             partials: [Partial::default(); PARTIALS],
             partial_count: 0,
+            attack_cut: 0.0,
+            attack_target: 0.0,
+            attack_left: 0.0,
+            attack_step: 0.0,
+            attack_follow: 0.0,
             noise_amp: 0.0,
             noise_decay: 0.0,
             noise_lp: 0.0,
@@ -4242,6 +4479,8 @@ impl<const PARTIALS: usize> Default for Voice<PARTIALS> {
             thump_c0: 0.0,
             thump_seed: 1,
             thump_keybed: false,
+            bridge_attack: [BridgeAttackBand::default(); 2],
+            action_force: [0.0; 6],
             keybed_out: 0.0,
             pan_left: 0.0,
             horizontal_bridge: HORIZONTAL_BRIDGE.get(),
@@ -4287,16 +4526,38 @@ impl<const PARTIALS: usize> Default for Voice<PARTIALS> {
 }
 
 impl<const PARTIALS: usize> Voice<PARTIALS> {
-    /// Renders one mono sample and advances every live component.
-    #[inline(always)]
-    fn tick(&mut self, sympathy: f32) -> f32 {
-        let mut sum = 0.0;
-        self.keybed_out = 0.0;
-        // A merged blow's momentum, arriving over the contact.
-        let pushing = self.push_in > 0;
-        if pushing {
-            self.push_in -= 1;
+    /// The contact solver uses one equivalent string with the hammer mass
+    /// shared over the unison. Its initial motion is the mean of the real
+    /// vertical lanes, not the audible onset bloom or the soundboard.
+    #[cfg(feature = "moving-string-contact")]
+    fn contact_motion(&self) -> Option<StrikeMotion> {
+        let mut initial = StrikeMotion::zero();
+        let mut moving = false;
+        for partial in &self.partials[..self.partial_count] {
+            if partial.slope == 0.0 || partial.motion.metres_per_unit == 0.0 {
+                continue;
+            }
+            let harmonic = roundf(partial.slope.abs() * 16.0) as usize;
+            if harmonic == 0 || harmonic > SIM_MODES {
+                continue;
+            }
+            let strings = partial.bridge_vertical.iter().sum::<f32>();
+            if strings == 0.0 {
+                continue;
+            }
+            let n = harmonic - 1;
+            initial.q[n] =
+                (partial.motion.s[0] + partial.motion.s[1] + partial.motion.s[2]) / strings;
+            initial.over_omega[n] =
+                (partial.motion.c[0] + partial.motion.c[1] + partial.motion.c[2]) / strings;
+            moving |= initial.q[n] != 0.0 || initial.over_omega[n] != 0.0;
         }
+        moving.then_some(initial)
+    }
+
+    /// Advances the string modes and returns their radiation and slope.
+    #[inline]
+    fn tick_partials<const SHADE: bool>(&mut self, sympathy: f32, pushing: bool) -> (f32, f32) {
         let knob_horizontal_bridge = self.horizontal_bridge;
         // The tension the string is under RIGHT NOW, taken from the partials
         // that carry the energy.
@@ -4309,8 +4570,10 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
         // summed here: they hold nearly all the energy, and Bank and Sujbert
         // note that the excitation need not be computed where the resonator
         // bank has little gain.
-        let mut slope = 0.0f32;
+        let (mut sum, mut slope, mut overtones) = (0.0, 0.0, 0.0);
         for partial in self.partials[..self.partial_count].iter_mut() {
+            #[cfg(feature = "moving-string-contact")]
+            partial.tick_contact_motion(knob_horizontal_bridge, pushing, sympathy);
             // The bridge pushes back: every free string is a driven
             // resonator riding the rest of the instrument, weighted by the
             // same coupling its drain uses -- reciprocity again.
@@ -4336,7 +4599,35 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
             let voice = partial.tick(knob_horizontal_bridge);
             slope += voice * partial.slope;
             sum += voice;
+            // The transverse slope encodes harmonic order. It travels
+            // with the partial when a cull reorders the active ladder.
+            if SHADE && (2.0 / 16.0..=6.0 / 16.0).contains(&partial.slope.abs()) {
+                overtones += voice;
+            }
         }
+        if SHADE {
+            sum -= self.attack_cut * overtones;
+        }
+        (sum, slope)
+    }
+
+    fn tick(&mut self, sympathy: f32) -> f32 {
+        self.keybed_out = 0.0;
+        self.action_force = [0.0; 6];
+        // A merged blow's momentum, arriving over the contact.
+        let pushing = self.push_in > 0;
+        if pushing {
+            self.push_in -= 1;
+        }
+        let (mut sum, slope) = if self.attack_left > 0.0 || self.attack_cut > 1e-4 {
+            let x = (1.25 * self.attack_left).min(1.0);
+            let cut = self.attack_target * x * x * (3.0 - 2.0 * x);
+            self.attack_cut += self.attack_follow * (cut - self.attack_cut);
+            self.attack_left = (self.attack_left - self.attack_step).max(0.0);
+            self.tick_partials::<true>(sympathy, pushing)
+        } else {
+            self.tick_partials::<false>(sympathy, pushing)
+        };
         sum += self.duplex[0].tick() + self.duplex[1].tick();
         // The longitudinal force at the bridge is the transverse slope
         // squared. The dynamic tension term the termination feels is
@@ -4428,6 +4719,13 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
                 self.keybed_out += knock;
             } else {
                 sum += knock;
+                for (index, band) in self.bridge_attack.iter_mut().enumerate() {
+                    let sample = band.tick(knock);
+                    let start = 3 * index;
+                    for tap in start..start + 3 {
+                        self.action_force[tap] = sample * ACTION_SUPPORT_WEIGHTS[tap];
+                    }
+                }
             }
             self.thump_rise *= self.thump_rise_step;
             self.thump_amp *= self.thump_decay;
@@ -4435,7 +4733,9 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
         if self.onset < 1.0 {
             let x = self.onset;
             self.onset = (x + self.onset_step).min(1.0);
-            return sum * (x * x * (3.0 - 2.0 * x));
+            let onset = x * x * (3.0 - 2.0 * x);
+            self.action_force = self.action_force.map(|force| force * onset);
+            return sum * onset;
         }
         sum
     }
@@ -4564,7 +4864,7 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
         };
         let sympathy = (feed - self.last_out) * sympathy_rate * free;
         let sample = self.tick(sympathy);
-        self.last_out = sample;
+        self.last_out = self.action_force.iter().copied().fold(sample, |sum, force| sum + force);
         let keybed_left = self.keybed_out * self.pan_left;
         let keybed_right = self.keybed_out * self.pan_right;
         // What drives the BODY is the bridge. The strings used to
@@ -4615,6 +4915,7 @@ impl<const PARTIALS: usize> Voice<PARTIALS> {
             force,
             drive_index: self.drive_index,
             drive_frac: self.drive_frac,
+            action_force: self.action_force.map(|force| force * (self.pan_left + self.pan_right)),
             culled,
         }
     }
@@ -5592,7 +5893,7 @@ pub struct ConcertGrand {
     /// radiation below its first mode, for the board, the undamped
     /// lengths and the damped bed -- every string reaches the air through
     /// the board. See `RADIATION_CORNER_HZ`.
-    rim: [[[f32; 2]; RIM_SECTIONS]; 6],
+    rim: [[[f32; 2]; RIM_SECTIONS]; 7],
     /// Their coefficients, `[b0, b1, b2, a1, a2]`, set in `tune_board`.
     rim_coef: [[f32; 5]; RIM_SECTIONS],
     /// Counts strikes, so per-strike randomness never repeats a note's exact
@@ -5626,6 +5927,8 @@ pub struct ConcertGrand {
     early_taps: [[(usize, f32); 6]; 2],
     /// The microphone chain, retuned whenever a room control moves.
     direct_gain: [f32; 2],
+    board_capture_gain: f32,
+    radiation_bands: [RadiationBand; 2],
     /// What each capsule hears of the keyboard, by its own path. See
     /// `KEYBED_OFFSET_M`.
     keybed_gain: [f32; 2],
@@ -5788,7 +6091,7 @@ impl Default for ConcertGrand {
             room: [[0.0; ROOM_BUFFER]; ROOM_LINES],
             room_len: [1; ROOM_LINES],
             air_dc: [0.0; 2],
-            rim: [[[0.0; 2]; RIM_SECTIONS]; 6],
+            rim: [[[0.0; 2]; RIM_SECTIONS]; 7],
             rim_coef: [[1.0, 0.0, 0.0, 0.0, 0.0]; RIM_SECTIONS],
             strike_serial: 0,
             damp_serial: 0,
@@ -5809,6 +6112,8 @@ impl Default for ConcertGrand {
             early_write: 0,
             early_taps: [[(1, 0.0); 6]; 2],
             direct_gain: [1.0; 2],
+            board_capture_gain: 1.0,
+            radiation_bands: RADIATION_BAND_CENTERS.map(|center| RadiationBand::tune(center, 48_000.0)),
             keybed_gain: [1.0; 2],
             reverb_gain: 1.0,
             early_gain: 0.0,
@@ -6325,6 +6630,21 @@ struct StrikeConfiguration {
     comb_floor: f32,
 }
 
+struct StrikeMotion {
+    q: [f32; SIM_MODES],
+    over_omega: [f32; SIM_MODES],
+}
+
+impl StrikeMotion {
+    #[cfg(any(test, feature = "moving-string-contact"))]
+    fn zero() -> Self {
+        Self {
+            q: [0.0; SIM_MODES],
+            over_omega: [0.0; SIM_MODES],
+        }
+    }
+}
+
 /// Integrates the hammer against the string modes during contact.
 ///
 /// The hammer separates -- the escape is emergent, and its measured times
@@ -6344,6 +6664,17 @@ fn simulate_strike(
     frequencies: &[f32],
     modes: usize,
     configuration: StrikeConfiguration,
+) -> ([f32; SIM_MODES], [f32; SIM_MODES]) {
+    simulate_contact(frequencies, modes, configuration, None)
+}
+
+/// Returns the forced increment only. Existing motion evolves separately
+/// through the same homogeneous recurrence, so it is never added twice.
+fn simulate_contact(
+    frequencies: &[f32],
+    modes: usize,
+    configuration: StrikeConfiguration,
+    initial: Option<&StrikeMotion>,
 ) -> ([f32; SIM_MODES], [f32; SIM_MODES]) {
     #[cfg(test)]
     let configuration = {
@@ -6436,7 +6767,18 @@ fn simulate_strike(
     }
     let mut q = [0.0f32; SIM_MODES];
     let mut v = [0.0f32; SIM_MODES];
+    let mut free_q = [0.0f32; SIM_MODES];
+    let mut free_v = [0.0f32; SIM_MODES];
     let mut hammer_y = 0.0f32;
+    if let Some(initial) = initial {
+        for n in 0..modes {
+            free_q[n] = initial.q[n];
+            free_v[n] = initial.over_omega[n] * omega[n];
+            // First touch follows the current wire position, with zero
+            // initial penetration. The wire's velocity is not reset.
+            hammer_y += free_q[n] * shape[n];
+        }
+    }
     let mut hammer_v = velocity0;
     let mut touched = false;
     #[cfg(test)]
@@ -6464,6 +6806,11 @@ fn simulate_strike(
         let mut string_y = 0.0;
         for n in 0..modes {
             string_y += q[n] * shape[n];
+        }
+        if initial.is_some() {
+            for n in 0..modes {
+                string_y += free_q[n] * shape[n];
+            }
         }
         let felt = hammer_y - string_y;
         let force = if felt > 0.0 {
@@ -6501,6 +6848,12 @@ fn simulate_strike(
         for n in 0..modes {
             v[n] += (-omega[n] * omega[n] * q[n] + (2.0 / string_mass) * shape[n] * force) * dt;
             q[n] += v[n] * dt;
+        }
+        if initial.is_some() {
+            for n in 0..modes {
+                free_v[n] += -omega[n] * omega[n] * free_q[n] * dt;
+                free_q[n] += free_v[n] * dt;
+            }
         }
     }
     #[cfg(test)]
@@ -7663,6 +8016,13 @@ impl StringUnit {
         let mut colour = [0.0_f32; MAX_PARTIALS];
         let mut phase_q = [0.0_f32; MAX_PARTIALS];
         let mut phase_o = [1.0_f32; MAX_PARTIALS];
+        #[cfg(feature = "moving-string-contact")]
+        let previous_motion =
+            restrike_target.and_then(|slot| unit_voice!(self, slot).contact_motion());
+        #[cfg(feature = "moving-string-contact")]
+        let mut contact_reference = [0.0f32; MAX_PARTIALS];
+        #[cfg(feature = "moving-string-contact")]
+        let mut contact_response = [(1.0f32, 0.0f32); MAX_PARTIALS];
         let mut count = 0;
         let mut peak = 0.0_f32;
         for n in 1..=MAX_PARTIALS {
@@ -7963,53 +8323,55 @@ impl StringUnit {
                         1.0 / FELT_REFERENCE_COMPRESSION_M.get(),
                         exponent - house_exponent,
                     );
-                let (q, over_omega) = simulate_strike(
-                    &frequencies,
-                    sim_modes,
-                    StrikeConfiguration {
-                        x0,
-                        // Hard blows compress the felt and narrow the contact,
-                        // the same law the recipe used.
-                        contact_width: width * (1.05 - 0.45 * velocity),
-                        mass,
-                        string_mass,
-                        stiffness,
-                        exponent,
-                        velocity: velocity0,
-                        // A cap only: the hammer leaves when the string throws
-                        // it off. 20 ms is several times any physical contact.
-                        contact_seconds: 0.020 * CONTACT_STRETCH.get(),
-                        // The hysteresis depth came down from 0.85 on 0.88.0,
-                        // and the story is worth keeping. At 0.85 with the
-                        // half-millisecond relaxation, the unloading force is
-                        // clamped to zero against the remembered deeper
-                        // compression -- the fortissimo hammer buries ~1 mm
-                        // into crushed felt and HOVERS there at zero force
-                        // (traced by `strike_profile`: 4 ms of F=0 with the
-                        // hammer nearly stationary) until the agraffe
-                        // reflection digs it out. Measured, A0 ff stayed
-                        // 3.55x the asked contact and the pp/ff contact
-                        // ratio ran 1.23 where the instrument runs ~2.6:
-                        // the one mechanism that carries touch into timbre,
-                        // compressed exactly where it matters most.
-                        //
-                        // At 0.5 the felt still dissipates (the loop loses
-                        // half its unloading force) but keeps enough spring
-                        // to eject the hammer: A0 ff 7.10 -> 4.06 ms, C2 ff
-                        // 3.57 -> 3.17, C4 ff 2.43 -> 2.11, C4 pp lands on
-                        // its ask (0.90x), and the pp/ff ratio recovers to
-                        // 1.89. Sweeping deeper (0.3, 0.0) buys almost no
-                        // further contact -- the residue is the genuine
-                        // physics of a light hammer on a heavy string --
-                        // while the brightness keeps climbing, so 0.5 is
-                        // where the trade stops paying. The felt sweep that
-                        // measured all of this is `felt_sweep`; the K
-                        // compensation lives in FELT_K_A0.
-                        stulov_epsilon: STULOV_EPSILON.get(),
-                        stulov_tau: STULOV_TAU_S.get(),
-                        comb_floor: COMB_FLOOR.get(),
-                    },
-                );
+                let strike_configuration = StrikeConfiguration {
+                    x0,
+                    // Hard blows compress the felt and narrow the contact,
+                    // the same law the recipe used.
+                    contact_width: width * (1.05 - 0.45 * velocity),
+                    mass,
+                    string_mass,
+                    stiffness,
+                    exponent,
+                    velocity: velocity0,
+                    // A cap only: the hammer leaves when the string throws
+                    // it off. 20 ms is several times any physical contact.
+                    contact_seconds: 0.020 * CONTACT_STRETCH.get(),
+                    // The hysteresis depth came down from 0.85 on 0.88.0,
+                    // and the story is worth keeping. At 0.85 with the
+                    // half-millisecond relaxation, the unloading force is
+                    // clamped to zero against the remembered deeper
+                    // compression -- the fortissimo hammer buries ~1 mm
+                    // into crushed felt and HOVERS there at zero force
+                    // (traced by `strike_profile`: 4 ms of F=0 with the
+                    // hammer nearly stationary) until the agraffe
+                    // reflection digs it out. Measured, A0 ff stayed
+                    // 3.55x the asked contact and the pp/ff contact
+                    // ratio ran 1.23 where the instrument runs ~2.6:
+                    // the one mechanism that carries touch into timbre,
+                    // compressed exactly where it matters most.
+                    //
+                    // At 0.5 the felt still dissipates (the loop loses
+                    // half its unloading force) but keeps enough spring
+                    // to eject the hammer: A0 ff 7.10 -> 4.06 ms, C2 ff
+                    // 3.57 -> 3.17, C4 ff 2.43 -> 2.11, C4 pp lands on
+                    // its ask (0.90x), and the pp/ff ratio recovers to
+                    // 1.89. Sweeping deeper (0.3, 0.0) buys almost no
+                    // further contact -- the residue is the genuine
+                    // physics of a light hammer on a heavy string --
+                    // while the brightness keeps climbing, so 0.5 is
+                    // where the trade stops paying. The felt sweep that
+                    // measured all of this is `felt_sweep`; the K
+                    // compensation lives in FELT_K_A0.
+                    stulov_epsilon: STULOV_EPSILON.get(),
+                    stulov_tau: STULOV_TAU_S.get(),
+                    comb_floor: COMB_FLOOR.get(),
+                };
+                let (q, over_omega) =
+                    simulate_strike(&frequencies, sim_modes, strike_configuration);
+                #[cfg(feature = "moving-string-contact")]
+                let moving = previous_motion.as_ref().map(|initial| {
+                    simulate_contact(&frequencies, sim_modes, strike_configuration, Some(initial))
+                });
                 // Scale the simulated strike to the recipe's level.
                 //
                 // Measured, `peak / sim_peak` runs from about 1,000 to over
@@ -8057,6 +8419,23 @@ impl StringUnit {
                     let bridge = (n + 1) as f32;
                     magnitudes[n] = bridge * sqrtf(q[n] * q[n] + over_omega[n] * over_omega[n]);
                     sim_peak = sim_peak.max(magnitudes[n] * colour[n]);
+                    #[cfg(feature = "moving-string-contact")]
+                    {
+                        let norm = q[n] * q[n] + over_omega[n] * over_omega[n];
+                        contact_reference[n] = sqrtf(norm);
+                        if let Some((moving_q, moving_o)) = moving.as_ref()
+                            && norm > 1e-30
+                        {
+                            // A complex ratio keeps the existing radiation,
+                            // phase voicing and level calibration. Do not
+                            // renormalize the moving response: its change in
+                            // work is precisely what this experiment measures.
+                            contact_response[n] = (
+                                (moving_q[n] * q[n] + moving_o[n] * over_omega[n]) / norm,
+                                (moving_o[n] * q[n] - moving_q[n] * over_omega[n]) / norm,
+                            );
+                        }
+                    }
                 }
                 if sim_peak > 0.0 {
                     // The strike SETS the spectrum; the recipe is a floor.
@@ -8180,6 +8559,25 @@ impl StringUnit {
         // rate proportional to its frequency — precisely the synthesizer
         // "shimmer" a real unison does not have.
         let sample_rate = self.engine.sample_rate;
+        // A large early overtone share makes the hammer sound glassy, most
+        // readily when those modes sit well above the board's bass response.
+        let overtone_power: f32 = amplitudes[1..count.min(6).max(1)]
+            .iter()
+            .map(|amplitude| amplitude * amplitude)
+            .sum();
+        let attack_cut = ((f0 - 280.0) / 280.0).clamp(0.0, 1.0)
+            * (1.0 - 0.65 * top_unison)
+            * (0.94 - 0.17 * velocity)
+            * overtone_power
+            / (overtone_power + 0.035 * amplitudes[0] * amplitudes[0]).max(1e-9);
+        // Leave the longest strings and the closely tuned top octave on
+        // their established balance. A separated transverse polarization
+        // in between gives the fundamental room to beat as the unison decays.
+        let motion = ((f0 - 700.0) / 340.0).clamp(0.0, 1.0);
+        let motion = motion * motion * (3.0 - 2.0 * motion) * (1.0 - top_unison);
+        let unison = self.engine.controls.unison * self.engine.controls.lab(13) / 0.65;
+        let lateral_split_hz = 0.9 * unison.clamp(0.0, 1.5);
+        let motion = motion * unison.clamp(0.0, 1.0);
         // Out of the ladder loop, because none of it depends on the partial.
         // Measured, a note-on is 8.55 us per partial and almost nothing else,
         // so what the loop does per partial is the whole of the note-on block
@@ -8241,6 +8639,8 @@ impl StringUnit {
             // share of the excitation to the slow horizontal polarization.
             let weak_load = (1.0 - modal_load).max(0.0);
             let horizontal_share = horizontal_share * (1.0 + weak_load);
+            let polarisation_shift = if n == 0 { motion } else { 0.0 };
+            let horizontal_extra = 0.03 * polarisation_shift;
             let t60 = t60 * board_decay * self.engine.cal(note, 4) * string_life;
             let floor_reach = if n == 0 {
                 let above = (frequency - 2.0 * BOARD_MEASURED_KNEE_HZ).max(0.0);
@@ -8382,19 +8782,26 @@ impl StringUnit {
             // sideways. This is also where the second decay stage is most
             // prominent in measured pianos.
             let (pq, po) = (phase_q[n], phase_o[n]);
+            #[cfg(feature = "moving-string-contact")]
+            let (pq, po) = {
+                let (re, im) = contact_response[n];
+                (pq * re - po * im, pq * im + po * re)
+            };
             let mut built = Partial::default();
+            let vertical_amplitude = amplitude * (1.0 - horizontal_extra);
+            let horizontal_ratio = exp2f(
+                polarisation_cents
+                    * (0.6 + 0.8 * hash01((note as u32) << 7 | (n as u32) << 2 | 5))
+                    / 1200.0,
+            );
+            let horizontal_frequency = frequency * horizontal_ratio
+                + polarisation_shift * (lateral_split_hz - frequency * (horizontal_ratio - 1.0));
             built.set_lane(
                 LANE_HORIZONTAL,
                 Component::start_state(
-                    amplitude * horizontal_share * pq,
-                    amplitude * horizontal_share * po,
-                    (frequency
-                        * exp2f(
-                            polarisation_cents
-                                * (0.6 + 0.8 * hash01((note as u32) << 7 | (n as u32) << 2 | 5))
-                                / 1200.0,
-                        ))
-                    .min(nyquist),
+                    amplitude * (horizontal_share + horizontal_extra) * pq,
+                    amplitude * (horizontal_share + horizontal_extra) * po,
+                    horizontal_frequency.min(nyquist),
                     intrinsic,
                     sample_rate,
                 ),
@@ -8453,13 +8860,22 @@ impl StringUnit {
                     built.set_lane(
                         lane,
                         Component::start_state(
-                            amplitude * share * rq,
-                            amplitude * share * ro,
+                            vertical_amplitude * share * rq,
+                            vertical_amplitude * share * ro,
                             (frequency * ratio).min(nyquist),
                             intrinsic,
                             sample_rate,
                         ),
                     );
+                }
+            }
+            #[cfg(feature = "moving-string-contact")]
+            if contact_reference[n] > 0.0 && amplitude.abs() > 1e-20 {
+                let strings = built.bridge_vertical.iter().sum::<f32>();
+                built.motion.metres_per_unit = contact_reference[n] * strings / amplitude.abs();
+                for lane in 0..4 {
+                    built.motion.s[lane] = built.s[lane] * built.motion.metres_per_unit;
+                    built.motion.c[lane] = built.c[lane] * built.motion.metres_per_unit;
                 }
             }
             // Keep the original onset cancellation with the new leverage.
@@ -8628,6 +9044,18 @@ impl StringUnit {
                 rise,
             )
         };
+        // The hammer's specific kinetic energy excites the action supports.
+        let speed = letoff / HAMMER_V_FF.get().max(0.05);
+        let impact = speed * speed
+            * THUMP_BASE.get()
+            * Controls::noise_gain(self.engine.controls.action_noise)
+            * self.engine.controls.lab(2);
+        let bridge_attack = BridgeAttackBand::from_impact(
+            thump_amp,
+            impact,
+            sample_rate,
+            self.engine.string_length(position),
+        );
 
         // Duplex scale: the string segments behind the bridge, tuned high,
         // struck only through the bridge, and — crucially — undamped, so a
@@ -8702,6 +9130,11 @@ impl StringUnit {
             for partial in voice.partials[..voice.partial_count].iter_mut() {
                 partial.push = [0.0; LANES];
                 partial.push_s = [0.0; LANES];
+                #[cfg(feature = "moving-string-contact")]
+                {
+                    partial.motion.push_s = [0.0; 4];
+                    partial.motion.push_c = [0.0; 4];
+                }
             }
             for fresh in partials[..placed].iter() {
                 let target = if fresh.slope != 0.0 {
@@ -8717,6 +9150,20 @@ impl StringUnit {
                 if target != usize::MAX {
                     let existing = &mut voice.partials[target];
                     for lane in 0..LANES {
+                        #[cfg(feature = "moving-string-contact")]
+                        if lane < 4 {
+                            let magnitude = sqrtf(
+                                fresh.s[lane] * fresh.s[lane] + fresh.c[lane] * fresh.c[lane],
+                            );
+                            let signed = if fresh.c[lane] < 0.0 {
+                                -magnitude
+                            } else {
+                                magnitude
+                            };
+                            existing.motion.push_s[lane] = 0.0;
+                            existing.motion.push_c[lane] =
+                                signed * fresh.motion.metres_per_unit / merge_ramp as f32;
+                        }
                         // A hammer meeting a string that is already moving
                         // gives it MOMENTUM. It does not teleport the string:
                         // the displacement is continuous across the blow and
@@ -8822,6 +9269,10 @@ impl StringUnit {
                     existing.coupling = fresh.coupling;
                     existing.drain = fresh.drain;
                     existing.bridge_vertical = fresh.bridge_vertical;
+                    #[cfg(feature = "moving-string-contact")]
+                    if fresh.motion.metres_per_unit > 0.0 {
+                        existing.motion.metres_per_unit = fresh.motion.metres_per_unit;
+                    }
                 } else if voice.partial_count < MAX_PARTIALS {
                     // A partial the living voice did not have arrives over
                     // the contact too: its velocity quadrature pushed in
@@ -8835,6 +9286,14 @@ impl StringUnit {
                         arriving.push_s[lane] = 0.0;
                         arriving.s[lane] = 0.0;
                         arriving.c[lane] = 0.0;
+                        #[cfg(feature = "moving-string-contact")]
+                        if lane < 4 {
+                            arriving.motion.s[lane] = 0.0;
+                            arriving.motion.c[lane] = 0.0;
+                            arriving.motion.push_s[lane] = 0.0;
+                            arriving.motion.push_c[lane] =
+                                signed * fresh.motion.metres_per_unit / merge_ramp as f32;
+                        }
                     }
                     voice.partials[voice.partial_count] = arriving;
                     voice.partial_count += 1;
@@ -8846,6 +9305,9 @@ impl StringUnit {
             // The key bottoms out on every blow, this one included, the
             // aftertouch after the strike.
             voice.thump_amp = voice.thump_amp.max(thump_amp);
+            voice.bridge_attack = bridge_attack;
+            voice.attack_target = attack_cut;
+            voice.attack_left = if attack_cut > 1e-4 { 1.0 } else { 0.0 };
             voice.thump_rise = 1.0;
             voice.thump_in = keybed_delay(letoff, sample_rate);
             for (mine, theirs) in voice.duplex.iter_mut().zip(duplex.iter()) {
@@ -9039,6 +9501,12 @@ impl StringUnit {
         voice.noise_lp = 0.0;
         voice.noise_seed = 0x9E37_79B9 ^ (note as u32).wrapping_mul(2_654_435_761);
         voice.thump_amp = thump_amp;
+        voice.bridge_attack = bridge_attack;
+        voice.attack_cut = attack_cut;
+        voice.attack_target = attack_cut;
+        voice.attack_left = if attack_cut > 1e-4 { 1.0 } else { 0.0 };
+        voice.attack_step = 1.0 / (0.125 * sample_rate);
+        voice.attack_follow = 1.0 - expf(-1.0 / (0.003 * sample_rate));
         // The string is struck first; the key lands on its bed the
         // aftertouch later, the hammer's flight sooner. See ACTION_RATIO.
         voice.thump_in = keybed_delay(letoff, sample_rate);
@@ -9053,14 +9521,21 @@ impl StringUnit {
         voice.thump_z1 = 0.0;
         voice.thump_z2 = 0.0;
         {
-            // RBJ low-pass at the register's corner with quality THUMP_Q.
-            let corner = THUMP_CORNER_HZ * powf(THUMP_CORNER_TOP_HZ / THUMP_CORNER_HZ, position);
+            let natural_corner =
+                THUMP_CORNER_HZ * powf(THUMP_CORNER_TOP_HZ / THUMP_CORNER_HZ, position);
+            let rise = (natural_corner - THUMP_CORNER_HZ).max(0.0);
+            let span = THUMP_BODY_LIMIT_HZ - THUMP_CORNER_HZ;
+            let corner = THUMP_CORNER_HZ + rise / (1.0 + rise / span);
+            let body_gain = 1.0 + 1.3 * rise / (rise + 140.0);
+            // The two low-pass stages share the gain. Keep the thump envelope
+            // independent so the return at key-up uses the same threshold.
+            let filter_gain = sqrtf(body_gain);
             let w0 = core::f32::consts::TAU * corner / sample_rate;
             let (sin_w0, cos_w0) = sincosf(w0);
             let alpha = sin_w0 / (2.0 * THUMP_Q);
             let a0 = 1.0 + alpha;
-            voice.thump_b0 = (1.0 - cos_w0) * 0.5 / a0;
-            voice.thump_b1 = (1.0 - cos_w0) / a0;
+            voice.thump_b0 = ((1.0 - cos_w0) * 0.5 / a0) * filter_gain;
+            voice.thump_b1 = ((1.0 - cos_w0) / a0) * filter_gain;
             voice.thump_a1 = -2.0 * cos_w0 / a0;
             voice.thump_a2 = (1.0 - alpha) / a0;
         }
@@ -9430,6 +9905,17 @@ impl StringUnit {
                 made.force += one.force;
                 made.drive_points[one.drive_index] += one.force * (1.0 - one.drive_frac);
                 made.drive_points[one.drive_index + 1] += one.force * one.drive_frac;
+                for (force, offset) in one.action_force.into_iter().zip(ACTION_SUPPORT_OFFSETS) {
+                    if force != 0.0 {
+                        let along = (one.drive_index as f32 + one.drive_frac + offset)
+                            .clamp(0.0, (BOARD_DRIVE_POINTS - 1) as f32);
+                        let left = (along as usize).min(BOARD_DRIVE_POINTS - 2);
+                        let fraction = along - left as f32;
+                        made.force += force;
+                        made.drive_points[left] += force * (1.0 - fraction);
+                        made.drive_points[left + 1] += force * fraction;
+                    }
+                }
                 culled += one.culled;
             }};
         }
@@ -9780,20 +10266,21 @@ impl ConcertGrand {
             {
                 mode.out_y = [cold.pan_left, cold.pan_right];
                 mode.out_y1 = [0.0, 0.0];
+                mode.room_y = [1.0, 0.0];
             }
             return;
         }
-        let height = clamp_between(
-            self.engine.controls.mic_distance,
-            MIC_DISTANCE_MIN_M.get(),
-            MIC_DISTANCE_MAX_M.get(),
-        );
-        let half = 0.5 * MIC_SPACING_M.get() * self.engine.controls.width;
-        let capsules = [0.5 * BRIDGE_LENGTH_M - half, 0.5 * BRIDGE_LENGTH_M + half];
+        let distance = self.capture_distance();
+        let width = self.engine.controls.width;
+        let capsules = RecordingCapsule::pair(distance, CAPTURE_BRIDGE_OFFSET_M, width);
+        let reference = RecordingCapsule::pair(CAPTURE_REFERENCE_M, 0.0, width);
         let pattern = self.engine.controls.mic_pattern;
         let speed = SOUND_SPEED.get();
         const ALONG: usize = 40;
-        const ACROSS: usize = 7;
+        const ACROSS: usize = 14;
+        let across_samples: [f32; ACROSS] = core::array::from_fn(|j| {
+            ((j as f32 + 0.5) / ACROSS as f32 - 0.5) * BOARD_WIDTH_M
+        });
         let sample_rate = self.engine.sample_rate;
         for (mode, cold) in self.board[from..to]
             .iter_mut()
@@ -9801,45 +10288,61 @@ impl ConcertGrand {
         {
             let frequency = cold.omega * sample_rate / core::f32::consts::TAU;
             let k = core::f32::consts::TAU * frequency / speed;
-            let mut gains = [(0.0f32, 0.0f32); 2];
-            for i in 0..ALONG {
-                let x = (i as f32 + 0.5) / ALONG as f32;
-                // The same window the excitation reads through: a mode that
-                // only hears its bay must only speak from it, or the board
-                // radiates energy no string ever put into it.
-                let along =
-                    sincosf(core::f32::consts::PI * mode.shape_q as f32 * x + cold.shape_theta).1;
-                for j in 0..ACROSS {
-                    let y = ((j as f32 + 0.5) / ACROSS as f32 - 0.5) * BOARD_WIDTH_M;
-                    let across = sincosf(
-                        core::f32::consts::PI * cold.shape_qy * y / BOARD_WIDTH_M
-                            + cold.shape_theta_y,
-                    )
-                    .1;
-                    let shape = 2.0 * along * across;
-                    for (m, capsule) in capsules.iter().enumerate() {
-                        let dx = x * BRIDGE_LENGTH_M - capsule;
-                        let r = sqrtf(dx * dx + y * y + height * height).max(1e-3);
-                        let directivity = (1.0 - pattern) + pattern * height / r;
-                        let (sin_kr, cos_kr) = sincosf(-k * r);
-                        let weight = shape * directivity / r / (ALONG * ACROSS) as f32;
-                        gains[m].0 += weight * cos_kr;
-                        gains[m].1 += weight * sin_kr;
+            let across_rate = core::f32::consts::PI * cold.shape_qy / BOARD_WIDTH_M;
+            let across_shapes = across_samples.map(|y| {
+                (y, sincosf(across_rate * y + cold.shape_theta_y).1)
+            });
+            let integrate = |pair: [RecordingCapsule; 2]| {
+                let centre_path = pair[0].path((0.0, 0.0, 0.0), pattern).0;
+                let mut gains = [(0.0f32, 0.0f32); 2];
+                let mut scale_floor = 0.0;
+                for i in 0..ALONG {
+                    let x = (i as f32 + 0.5) / ALONG as f32;
+                    let along =
+                        sincosf(core::f32::consts::PI * mode.shape_q as f32 * x + cold.shape_theta).1;
+                    for (y, across) in across_shapes {
+                        let shape = 2.0 * along * across;
+                        for (m, capsule) in pair.into_iter().enumerate() {
+                            let point = ((x - 0.5) * BRIDGE_LENGTH_M, y, 0.0);
+                            let (range, response) = capsule.path(point, pattern);
+                            let (sin_kr, cos_kr) = sincosf(-k * (range - centre_path));
+                            let weight = shape * response / range / (ALONG * ACROSS) as f32;
+                            gains[m].0 += weight * cos_kr;
+                            gains[m].1 += weight * sin_kr;
+                            scale_floor += weight.abs();
+                        }
                     }
                 }
-            }
-            // Every mode keeps the power its pan gave it: 0.5 for the pair.
-            let power = gains[0].0 * gains[0].0
-                + gains[0].1 * gains[0].1
-                + gains[1].0 * gains[1].0
-                + gains[1].1 * gains[1].1;
-            let scale = if power > 0.0 { sqrtf(0.5 / power) } else { 0.0 };
-            for gain in gains.iter_mut() {
+                (gains, scale_floor)
+            };
+            let (reference_gain, incoherent) = integrate(reference);
+            let mut gains = integrate(capsules).0;
+            // Calibrate at the fixed reference. Moving the pair can then change
+            // a mode's power. Avoid boosting numerical nulls at the reference.
+            let power = reference_gain.iter().map(|(re, im)| re * re + im * im).sum();
+            let floor = 0.015 * incoherent;
+            let norm = sqrtf(f32::max(power, floor * floor));
+            let scale = if norm > 0.0 { sqrtf(0.5) / norm } else { 0.0 };
+            for gain in &mut gains {
                 gain.0 *= scale;
                 gain.1 *= scale;
             }
-            mode.set_pair(gains, cold.omega);
+            // A fixed mono emission estimate feeds the existing image/room
+            // paths. Otherwise moving the receiver also moves the room source.
+            let room = (
+                scale * (reference_gain[0].0 + reference_gain[1].0),
+                scale * (reference_gain[0].1 + reference_gain[1].1),
+            );
+            mode.set_pair(gains, room, cold.omega);
         }
+    }
+
+    fn capture_distance(&self) -> f32 {
+        clamp_between(
+            self.engine.controls.mic_distance,
+            MIC_DISTANCE_MIN_M.get(),
+            MIC_DISTANCE_MAX_M.get(),
+        )
     }
 
     fn board_mode(
@@ -10247,67 +10750,21 @@ impl ConcertGrand {
         self.room_low_gain = (low_ratio - 1.0).clamp(-0.6, 0.35);
         self.room_low_coeff = 1.0 - expf(-core::f32::consts::TAU * 150.0 / self.engine.sample_rate);
 
-        // The microphones, as two capsules rather than one point. Distance
-        // on a log axis; the direct sound falls as r_ref/r per capsule, the
-        // reverberant field holds, and the early reflections arrive from their
-        // mirror images along each capsule's own path.
-        // The control is the distance, in metres. It used to be a position on
-        // a log axis between these two knobs; they are still the range the
-        // model will work over, but they bound the value now rather than
-        // defining it. The fader keeps its feel through the logarithmic taper
-        // its descriptor declares, which is a property of the control and not
-        // of the number.
-        let distance = clamp_between(
-            self.engine.controls.mic_distance,
-            MIC_DISTANCE_MIN_M.get(),
-            MIC_DISTANCE_MAX_M.get(),
-        );
-        // The pattern axis b: p(theta) = (1-b) + b*cos(theta). Random-energy
-        // efficiency is what a capsule hears of a DIFFUSE field, which depends
-        // on the pattern and not on where the capsule stands, so it stays
-        // shared between the two.
         let b = self.engine.controls.mic_pattern;
         let random_energy = (1.0 - b) * (1.0 - b) + b * b / 3.0;
         self.reverb_gain = sqrtf(random_energy) / 0.577;
 
-        // The piano stands a third of the way down the hall, mid-width,
-        // soundboard at 1 m; the pair faces it from `distance` away, ears at
-        // 1.4 m.
         let piano = (0.33 * length, 0.5 * width, 1.0_f32);
-        let (az_sin, az_cos) = sincosf(MIC_AZIMUTH_RAD.get());
-        let reach = distance.min(0.6 * length);
-        // Close, the pair is lowered toward the strings, as an engineer does;
-        // at the reference distance and beyond it stands at ear height. With
-        // the height fixed at 1.4 m the bottom fifth of the fader changed the
-        // path by centimetres, and Mic Distance did nothing there.
-        //
-        // Named for what it is, and not `height`: that name is the ROOM's
-        // height a few lines up, and shadowing it put the ceiling image at
-        // the pair's own height. The mirror then sat at the same distance as
-        // the direct path, the clamp below pushed it to direct + 0.1 m, and
-        // every note in the compass went through a comb whose first notch
-        // is at 343 / (2 * 0.1) = 1.7 kHz. Measured on the partial envelope
-        // of all 30 grid notes against the reference: a fixed 15 dB hole
-        // from 1.4 to 2 kHz, present in every register alike, that vanished
-        // with the air chain off and survived the lid and the chamber being
-        // turned down one at a time.
-        let pair_height =
-            piano.2 + MIC_HEIGHT_M.get() * (reach / MIC_REFERENCE_M.get()).clamp(0.0, 1.0);
-        let centre = (
-            0.33 * length + reach * az_cos,
-            (0.5 * width - reach * az_sin).max(0.3),
-            pair_height,
-        );
-        // Both capsules look back at the instrument, splayed either side of
-        // that line. The splay is what makes the pattern axis do directional
-        // work: a cardioid turned 55 degrees off the source hears the near
-        // wall and the far wall quite differently, and an omni does not.
-        let aim = {
-            let (dx, dy) = (piano.0 - centre.0, piano.1 - centre.1);
-            let length = sqrtf(dx * dx + dy * dy).max(1e-3);
-            (dx / length, dy / length)
-        };
-        let (sin_half, cos_half) = sincosf(MIC_HALF_ANGLE_RAD);
+        let stereo_width = self.engine.controls.width;
+        let capsules =
+            RecordingCapsule::pair(self.capture_distance(), CAPTURE_BRIDGE_OFFSET_M, stereo_width);
+        let centre_path = capsules[0].path((0.0, 0.0, 0.0), b).0;
+        let reference = RecordingCapsule::pair(CAPTURE_REFERENCE_M, 0.0, stereo_width)[0];
+        let (reference_path, reference_response) = reference.path((0.0, 0.0, 0.0), b);
+        self.board_capture_gain = (MIC_REFERENCE_M.get() / reference_path)
+            .clamp(0.12, MIC_NEAR_CAP.get())
+            * MIC_PREAMP.get()
+            * reference_response;
         let images = [
             (piano.0, piano.1, -piano.2),               // floor
             (piano.0, piano.1, 2.0 * height - piano.2), // ceiling
@@ -10318,30 +10775,10 @@ impl ConcertGrand {
         ];
         let reflect = 1.0 - alpha_mid;
         let lid_angle = self.lid_radians();
-        for side in 0..2 {
-            let turn = if side == 0 { 1.0 } else { -1.0 };
-            // The capsule, offset across the pair's line and turned outward.
-            let across = (-aim.1, aim.0);
-            let half = 0.5 * MIC_SPACING_M.get() * turn;
-            let mic = (
-                centre.0 + across.0 * half,
-                centre.1 + across.1 * half,
-                centre.2,
-            );
-            let axis = (
-                aim.0 * cos_half - aim.1 * sin_half * turn,
-                aim.1 * cos_half + aim.0 * sin_half * turn,
-            );
-            // What this capsule makes of a source at `point`: its distance and
-            // its polar response at the angle the source arrives from. The
-            // sign is kept -- a figure-of-eight really does invert what
-            // reaches it from behind, and two capsules disagreeing about that
-            // is a thing a pair does.
-            let heard = |point: (f32, f32, f32)| -> (f32, f32) {
-                let (dx, dy, dz) = (point.0 - mic.0, point.1 - mic.1, point.2 - mic.2);
-                let range = sqrtf(dx * dx + dy * dy + dz * dz).max(0.3);
-                let cosine = (dx * axis.0 + dy * axis.1) / range;
-                (range, (1.0 - b) + b * cosine)
+        for (side, capsule) in capsules.into_iter().enumerate() {
+            let mic = (piano.0 + capsule.x, piano.1 + capsule.y, piano.2 + capsule.z);
+            let heard = |point: (f32, f32, f32)| {
+                capsule.path((point.0 - piano.0, point.1 - piano.1, point.2 - piano.2), b)
             };
             let (direct_path, direct_response) = heard(piano);
             // The direct sound falls as r_ref / r, and the cap sits well past
@@ -10367,7 +10804,7 @@ impl ConcertGrand {
             for (slot, image) in self.early_taps[side].iter_mut().zip(images) {
                 let (path, response) = heard(image);
                 let path = path.max(direct_path + 0.1);
-                let delay_s = (path - direct_path) / SOUND_SPEED.get();
+                let delay_s = (path - centre_path) / SOUND_SPEED.get();
                 let samples =
                     ((delay_s * self.engine.sample_rate) as usize).clamp(1, ROOM_BUFFER - 1);
                 let gain = reflect * (direct_path / path) * response * near;
@@ -10400,10 +10837,11 @@ impl ConcertGrand {
                     piano.1 + across * half_width,
                     piano.2,
                 );
+                let source_height = (source.1 - hinge_y) * lid_sin;
                 let image = (
                     source.0,
-                    source.1 + 2.0 * half_width * lid_sin * lid_sin,
-                    source.2 + 2.0 * half_width * lid_sin * lid_cos,
+                    source.1 - 2.0 * source_height * lid_sin,
+                    source.2 - 2.0 * source_height * lid_cos,
                 );
                 // Against the direct path from the same end of the board, not
                 // from its centre: the reflection's delay is its own detour.
@@ -10416,8 +10854,11 @@ impl ConcertGrand {
                 let normal = (0.0f32, lid_sin, lid_cos);
                 let to_image = (image.0 - mic.0, image.1 - mic.1, image.2 - mic.2);
                 let mic_height = (mic.1 - hinge_y) * normal.1 + (mic.2 - piano.2) * normal.2;
-                let image_height = (image.1 - hinge_y) * normal.1 + (image.2 - piano.2) * normal.2;
-                let t = (mic_height / (mic_height - image_height).max(1e-3)).clamp(0.0, 1.0);
+                if mic_height >= 0.0 {
+                    *tap = (1, 0.0);
+                    continue;
+                }
+                let t = mic_height / (mic_height + source_height).min(-1e-3);
                 let hit = (
                     mic.0 + t * to_image.0,
                     mic.1 + t * to_image.1,
@@ -10637,6 +11078,9 @@ impl ConcertGrand {
             self.retune();
         }
         // Knobs read once per call, not per sample.
+        if self.room_dirty {
+            self.tune_room();
+        }
         self.tune_pair();
         for slot in 0..SILENT_SLOTS {
             if self.silent_state[slot] == SILENT_DAMPED {
@@ -10701,9 +11145,6 @@ impl ConcertGrand {
         // it only limits a buffer carrying more note-ons than the instrument
         // has voices, where the surplus would be stolen away regardless.
         self.engine.strike_budget = MAX_VOICES as u32;
-        if self.room_dirty {
-            self.tune_room();
-        }
         if self.budget_pending {
             self.budget_pending = false;
             let quality = self.budgeted_quality(frames);
@@ -11051,14 +11492,17 @@ impl ConcertGrand {
             }
             let mut board_left = 0.0;
             let mut board_right = 0.0;
+            let mut board_room = 0.0;
             for mode in self.board.iter_mut().take(self.board_count) {
-                let (left, right) = mode.tick_pair(mode.excitation(&cos_t, &sin_t));
+                let (left, right, room) = mode.tick_pair(mode.excitation(&cos_t, &sin_t));
                 board_left += left;
                 board_right += right;
+                board_room += room;
             }
             // The rim: below its first mode the board radiates almost nothing.
             board_left = rim_pass(&mut self.rim[0], &self.rim_coef, board_left);
             board_right = rim_pass(&mut self.rim[1], &self.rim_coef, board_right);
+            board_room = rim_pass(&mut self.rim[6], &self.rim_coef, board_room);
             if self.body_gain != self.body_target {
                 let step = 1.0 / BANK_FADE_SAMPLES;
                 self.body_gain = if self.body_target > self.body_gain {
@@ -11158,7 +11602,7 @@ impl ConcertGrand {
             // What the lid and the room reflect is what the board radiates,
             // not the string's own motion: the string reaches the air only
             // through the bridge and the board.
-            let staged = (board_left + board_right) * knob_board_mix
+            let staged = board_room * self.body_gain * knob_board_mix
                 + (keybed_left + keybed_right) * knob_board_mix
                 + (undamped_left + undamped_right) * undamped_gain
                 + (bed_left + bed_right) * bed_gain
@@ -11297,14 +11741,14 @@ impl ConcertGrand {
             // +6 dB and allows +12.
             let board_mix = knob_board_mix * frame_state.lab[0] * knob_headroom;
             let (near_left, near_right) = (self.direct_gain[0], self.direct_gain[1]);
-            let mut direct_left = board_left * board_mix * near_left
+            let mut direct_left = board_left * board_mix * self.board_capture_gain
                 + keybed_left * board_mix * self.keybed_gain[0]
                 + undamped_left * undamped_gain * knob_headroom * near_left
                 + bed_left * bed_gain * knob_headroom * near_left
                 + open_left * knob_open_mix * sympathy * knob_headroom
                 + halo_left * knob_headroom
                 + lid_left * air * knob_headroom;
-            let mut direct_right = board_right * board_mix * near_right
+            let mut direct_right = board_right * board_mix * self.board_capture_gain
                 + keybed_right * board_mix * self.keybed_gain[1]
                 + undamped_right * undamped_gain * knob_headroom * near_right
                 + bed_right * bed_gain * knob_headroom * near_right
@@ -11351,8 +11795,14 @@ impl ConcertGrand {
             // chord at velocity 127 peaked 0.11 dB above the same chord at 100.
             // A soundboard is linear to a very good approximation, so nothing
             // here should compress until the output itself would clip.
-            let scaled_left = (direct_left + room_left * knob_headroom) * level;
-            let scaled_right = (direct_right + room_right * knob_headroom) * level;
+            let mix = [
+                (direct_left + room_left * knob_headroom) * level,
+                (direct_right + room_right * knob_headroom) * level,
+            ];
+            let [scaled_left, scaled_right] = self
+                .radiation_bands
+                .iter_mut()
+                .fold(mix, |x, band| band.tick(x));
             // The preamplifier: the gain an engineer adds after the capsules,
             // with the input stage's own bend above its knee -- a chord
             // driven past it compresses a couple of decibels and warms; a
@@ -12016,6 +12466,8 @@ impl ConcertGrand {
             return false;
         }
         self.engine.sample_rate = sample_rate as f32;
+        self.radiation_bands =
+            RADIATION_BAND_CENTERS.map(|center| RadiationBand::tune(center, self.engine.sample_rate));
         self.section_delay = (maximum_frames as usize).clamp(1, MAX_SECTION_DELAY);
         self.engine.restrike_merge = RESTRIKE_FRESH.get() < 0.5;
         self.tune_board();
@@ -12068,6 +12520,9 @@ impl ConcertGrand {
         self.halo_lp = 0.0;
         self.halo_index = [0; 4];
         self.lid_lp = [0.0; 2];
+        for band in &mut self.radiation_bands {
+            band.state = [[0.0; 2]; 2];
+        }
         self.room = [[0.0; ROOM_BUFFER]; ROOM_LINES];
         self.room_lp = [0.0; ROOM_LINES];
         self.room_index = [0; ROOM_LINES];
@@ -13102,6 +13557,101 @@ fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
 
 #[cfg(test)]
 mod tests {
+    fn contact_test_configuration() -> StrikeConfiguration {
+        StrikeConfiguration {
+            x0: 0.125,
+            contact_width: 0.02,
+            mass: 0.005,
+            string_mass: 0.01,
+            stiffness: 1e9,
+            exponent: 2.5,
+            velocity: 1.5,
+            contact_seconds: 0.02,
+            stulov_epsilon: 0.5,
+            stulov_tau: 0.0002,
+            comb_floor: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_stationary_contact_has_the_reference_response() {
+        let frequencies = [110.0, 220.0, 330.0, 440.0];
+        let configuration = contact_test_configuration();
+        let reference = simulate_strike(&frequencies, 4, configuration);
+        let zero = StrikeMotion::zero();
+        let moving = simulate_contact(&frequencies, 4, configuration, Some(&zero));
+        for n in 0..4 {
+            assert_eq!(reference.0[n].to_bits(), moving.0[n].to_bits());
+            assert_eq!(reference.1[n].to_bits(), moving.1[n].to_bits());
+        }
+    }
+
+    #[test]
+    fn contact_without_force_does_not_duplicate_the_ringing_string() {
+        let frequencies = [110.0, 220.0, 330.0, 440.0];
+        let mut configuration = contact_test_configuration();
+        configuration.stiffness = 0.0;
+        let mut initial = StrikeMotion::zero();
+        initial.q[0] = 0.0002;
+        initial.over_omega[1] = -0.0001;
+        let (q, over_omega) = simulate_contact(&frequencies, 4, configuration, Some(&initial));
+        assert!(q.iter().all(|value| *value == 0.0));
+        assert!(over_omega.iter().all(|value| *value == 0.0));
+    }
+
+    #[test]
+    fn the_contact_answers_to_the_direction_of_string_motion() {
+        let frequencies = [110.0, 220.0, 330.0, 440.0];
+        let configuration = contact_test_configuration();
+        let mut away = StrikeMotion::zero();
+        away.over_omega[0] = 0.3 / (core::f32::consts::TAU * frequencies[0]);
+        let mut toward = StrikeMotion::zero();
+        toward.over_omega[0] = -away.over_omega[0];
+        let a = simulate_contact(&frequencies, 4, configuration, Some(&away));
+        let b = simulate_contact(&frequencies, 4, configuration, Some(&toward));
+        let energy = |state: &([f32; SIM_MODES], [f32; SIM_MODES])| {
+            (0..4)
+                .map(|n| {
+                    let omega = core::f32::consts::TAU * frequencies[n];
+                    omega * omega * (state.0[n] * state.0[n] + state.1[n] * state.1[n])
+                })
+                .sum::<f32>()
+        };
+        assert!(a.0.iter().chain(a.1.iter()).all(|value| value.is_finite()));
+        assert!(b.0.iter().chain(b.1.iter()).all(|value| value.is_finite()));
+        assert!(energy(&b) > energy(&a) * 1.05);
+    }
+
+    #[cfg(feature = "moving-string-contact")]
+    #[test]
+    fn mechanical_coordinates_follow_the_coupled_audio_coordinates() {
+        let mut partial = Partial::default();
+        partial.bridge_vertical = [1.0, 1.0, 1.0];
+        partial.configure_bridge(0.1, 0.12);
+        for lane in 0..4 {
+            partial.set_lane(
+                lane,
+                Component::start(0.1, 110.0 + lane as f32, 0.99999, 44100.0),
+            );
+        }
+        partial.motion.metres_per_unit = 0.002;
+        for lane in 0..4 {
+            partial.motion.s[lane] = partial.s[lane] * 0.002;
+            partial.motion.c[lane] = partial.c[lane] * 0.002;
+        }
+        for _ in 0..2000 {
+            partial.tick_contact_motion(0.12, false, 0.0);
+            partial.tick(0.12);
+            for lane in 0..4 {
+                assert!((partial.motion.s[lane] - partial.s[lane] * 0.002).abs() < 1e-8);
+                assert!((partial.motion.c[lane] - partial.c[lane] * 0.002).abs() < 1e-8);
+            }
+        }
+        partial.retire_lane(1);
+        assert_eq!(partial.motion.s[1], 0.0);
+        assert_eq!(partial.motion.c[1], 0.0);
+    }
+
     use super::*;
 
     /// Tests run at a low rate to keep them fast; the model is rate-agnostic.
@@ -13729,7 +14279,7 @@ mod tests {
 
         // And it reaches the audio: the same note, released from the same
         // state, leaves a different tail once the rail has moved on.
-        let tail = |skips: usize| -> f32 {
+        let tail = |skips: usize| {
             let mut piano = prepared();
             // Measure landing variation at a fixed noise level, independent
             // of the factory mix.
@@ -13740,12 +14290,15 @@ mod tests {
             render(&mut piano, 64, &[note_on(60, 80)]);
             render(&mut piano, (FS * 0.4) as usize, &[]);
             render(&mut piano, 64, &[note_off(60)]);
-            energy(&render(&mut piano, (FS * 0.05) as usize, &[]))
+            render(&mut piano, (FS * 0.05) as usize, &[])
         };
         let (first, second) = (tail(0), tail(1));
+        // Similar total energy can hide a change in the shape of the decay.
+        let difference: Vec<_> = first.iter().zip(&second).map(|(a, b)| a - b).collect();
+        let residual = energy(&difference) / energy(&first).max(energy(&second));
         assert!(
-            (first - second).abs() > first.max(second) * 0.01,
-            "two releases left the same tail: {first} and {second}"
+            residual > 0.005_f32.powi(2),
+            "two releases left the same tail: relative residual energy {residual}"
         );
     }
 
@@ -18776,11 +19329,10 @@ mod bench {
     /// Nothing about the instrument's sound should move by accident, and
     /// until now nothing stopped it -- these two tests printed their hash and
     /// asserted nothing, so they passed whatever the instrument did.
-    // The approved factory voicing includes the weighted bridge, smoother
-    // board and restored upper free-string modes. See the listening profile.
-    const RENDER_FINGERPRINT: u64 = 0x5af4_65a8_de76_41d3;
+    // Factory voicing with the shared stereo pair and short action-support decay.
+    const RENDER_FINGERPRINT: u64 = 0xf105_af1e_1b78_2b8c;
     /// As `RENDER_FINGERPRINT`, for the pedalled scenario.
-    const RENDER_FINGERPRINT_PEDALS: u64 = 0x527e_9aef_ea1c_f737;
+    const RENDER_FINGERPRINT_PEDALS: u64 = 0x4e07_a9e9_dc30_57a5;
 
     /// A fingerprint of rendered audio: what the instrument sounds like,
     /// as one number.

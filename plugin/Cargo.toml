@@ -26,6 +26,8 @@ rackforge-ump = { workspace = true, optional = true }
 
 [features]
 default = []
+# Listening experiment: keep mechanical modal state for phase-aware restrikes.
+moving-string-contact = []
 lab = ["dep:cpal", "dep:midir", "dep:rackforge-ump"]
 wasm-tests = ["dep:rackforge-plugin-runtime"]
 host-tests = ["wasm-tests", "dep:rackforge-core", "dep:rackforge-plugin-api", "dep:wasmtime"]
