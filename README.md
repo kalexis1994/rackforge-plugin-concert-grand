@@ -1,7 +1,7 @@
 # RackForge Concert Grand
 
 Physically modelled piano, distributed as an independent RackForge plugin.
-Current package: **0.171.38**, ID `org.rackforge.concert-grand`.
+Current package: **0.171.39**, ID `org.rackforge.concert-grand`.
 
 The DSP, Web interface, programs, artwork, model tests, render tools and
 laboratory reports belong here. RackForge owns the portable SDK and host;

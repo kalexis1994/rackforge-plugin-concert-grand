@@ -1397,7 +1397,7 @@ dependencies = [
 
 [[package]]
 name = "rackforge-concert-grand"
-version = "0.171.38"
+version = "0.171.39"
 dependencies = [
  "cpal",
  "midir",
