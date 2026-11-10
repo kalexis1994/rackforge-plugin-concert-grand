@@ -1,127 +1,45 @@
-# RackForge Concert Grand
+# Concert Grand for RackForge
 
-Physically modelled piano, distributed as an independent RackForge plugin.
-Current package: **0.171.39**, ID `org.rackforge.concert-grand`.
+![Concert Grand piano with an open lid and a black lacquer finish](plugin/package/branding/banner.png)
 
-The DSP, Web interface, programs, artwork, model tests, render tools and
-laboratory reports belong here. RackForge owns the portable SDK and host;
-the supported SDK is pinned to a published Git commit in Cargo.toml.
+Concert Grand is a physically modeled acoustic piano for RackForge. It has 16 factory voicings, from concert and parlour grands to uprights and a Viennese fortepiano. You can shape the piano, move the virtual microphones, and save your own voicings from the PLAY panel.
 
-## Build and test
+## Get playing
 
-```sh
-cargo test --locked --release -p rackforge-concert-grand --lib -- --test-threads=1
-cargo test --locked --release -p rackforge-concert-grand --lib render_fingerprint -- --ignored --test-threads=1
-rustup target add wasm32-unknown-unknown
-cargo build --locked --release --target wasm32-unknown-unknown -p rackforge-concert-grand
-```
+Concert Grand comes bundled with RackForge Standard. [Download RackForge](https://github.com/kalexis1994/rackforge/releases/latest)
 
-Run tests with one thread: model knobs are process-wide atomics. The repository
-configures the required native stack and SIMD128/8 MiB WebAssembly stack.
-Native render fingerprints for the factory voicing are
-`f105af1e1b782b8c` and `4e07a9e9dc3057a5`.
+To install or update the piano separately, download `RF-Concert-Grand.rfplugin` and choose **Install plugin** in RackForge's Plugin Manager. [Download Concert Grand](https://github.com/kalexis1994/rackforge-plugin-concert-grand/releases/latest)
 
-Optional tools:
+1. Open **PLAY** and choose **RF - Concert Grand**.
+2. Play from a MIDI keyboard or RackForge's **Touch Controller**.
+3. Start with the **Concert Grand** voicing. Click the brass nameplate to search the voicings or use the arrows to step through them.
 
-```sh
-cargo run --release --features lab --example lab -- --list
-cargo test --release --features host-tests --tests -- --test-threads=1
-cargo run --release --features host-tests --example wasm-tax -- PACKAGE_DIRECTORY
-```
+## How the piano responds
 
-The native laboratory is Windows-specific. Host integration tests require
-RackForge's runtime dependencies and an already-built component.
+The piano generates each note as you play. A soft strike sounds rounder, while a harder strike brings out a brighter attack. The soundboard gives the vibrating strings their body. On damped notes, releasing the key brings the damper back onto the strings. Hold the sustain pedal and the notes ring on, with other strings resonating in response.
 
-## Package
+| Pedal | What you hear |
+| --- | --- |
+| **Sustain** (MIDI CC 64) | Lets notes keep ringing after you release the keys. A continuous pedal lets you use half-pedaling to shorten the ring gradually. |
+| **Sostenuto** (MIDI CC 66) | Holds the notes you were already playing when you pressed the pedal. Notes played afterward release normally when sustain is up. |
+| **Soft / una corda** (MIDI CC 67) | Softens the attack and changes the tone of notes you strike while the pedal is down. |
 
-Keep the published RackForge checkout beside this one, or set `RACKFORGE_ROOT`.
-It supplies the validated `rackforge-store` packer, not the piano's source.
+## Choose a voicing
 
-```sh
-python tools/build-package.py --output artifacts/RF-Concert-Grand.rfplugin
-```
+- **Concert Grand** is the starting sound. Try **Mellow Grand** for a softer attack, **Bright Grand** for more bite, or **Intimate Grand** for a close, narrow perspective.
+- **Concert 308**, **Salon 211**, and **Baby 150** give you different grand-piano scales. Play the same bass phrase on each to hear how the body and sustain change.
+- **Upright 114** is close and dry. **Player Upright** has a harder attack and the sound of a worn, slightly out-of-tune instrument. **Fortepiano** offers a lighter, period-piano character.
 
-Pass `--component PATH` to reuse a verified component and repeat
-`--native linux-aarch64=PATH_TO_LIBRARY` for native portable builds. The package
-always contains the component; hosts choose a native build on supported
-platforms. Verify every native build with `rackforge-core compare-native`
-against that same component before publishing it.
+## Shape and save your sound
 
-Releases attach `RF-Concert-Grand.rfplugin` and a SHA256 file to tag
-`v<package-version>`. RackForge consumes a specific release URL and checksum;
-its build no longer compiles this repository. Published assets must remain
-immutable: any change gets a new package version and a new host pin.
+| Panel | Controls to start with |
+| --- | --- |
+| **Sound** | Use **Brightness** to set the tone, **Dynamics** to shape the response to your touch, **Decay** to adjust the length of the ring, and **Level** to set the piano's output. |
+| **Room & Microphones** | Adjust **Mic Distance**, **Stereo Width**, and **Ambience Level** to move from a close perspective to a roomier sound. **Lid** changes how open the piano sounds. |
+| **Action & Noises** | Balance the sounds of the moving keys, note releases, and pedals with **Action Noise**, **Release Noise**, and **Pedal Noise**. |
 
-## Listening profile
+Choose **+ Save current** in **Voicings**, give your sound a name, and confirm. It appears under **Saved** in the nameplate selector alongside the factory voicings.
 
-The accepted version C renders of the Nocturne and La Campanella use Concert,
-44.1 kHz and blocks of 256 frames. The factory voicing uses `RADIATION_RATE=2.55`,
-`MERGE_RAMP_S=0.004` seconds and Hammer Hard at `0.51`. It also halves the
-gain of the free-string bank (`UNDAMPED_MIX=1.125`) to moderate the bell-like
-ring heard on G4. The model knobs share these defaults across the factory
-bank. Each preset inherits Hammer Hard from Concert unless it sets its own
-value, as Player Upright does. Existing states keep their saved settings.
+## License
 
-The hammer impact also drives two short-decay low bands through the action
-supports. The extra support gain tapers smoothly with shorter speaking
-lengths.
-The soundboard, lid and early room reflections share one stereo pair aimed
-through the open side of the lid, shifted 7.5 cm toward the treble.
-
-The latest listening profile smooths modal overlap and bridge-position contrast
-through the middle of the soundboard, uses weighted unison leverage at the
-bridge, and progressively restores the higher free-string modes. The gain
-transition is tied to the bank's frequency reference, so the G4/G6 resonance
-remains moderated while C6 recovers its release tail.
-Excitation tapers down at the lower edge of the undamped-string bank to
-reduce late partial buildup. The upper modes retain their existing gain.
-
-A shared low-mode bridge rule adjusts the fundamental across the keyboard.
-It preserves an already strong prompt decay and redistributes coherent loss,
-mode splitting and horizontal participation according to the estimated load.
-The higher partials keep their established bridge response.
-
-Where the upper fundamental has very little bridge load, a fraction of the
-continuous loss estimate damps out-of-phase motion. The projected coherent
-motion retains its existing decay rate.
-
-In the upper register the horizontal polarization couples less strongly to
-the bridge. Its participation follows the string frequency and is used in
-both the force sum and the bridge reaction.
-
-With partial sustain, a released key gives its felt time to reach the string
-before applying the pressure left by the rail. Pedal changes during that
-travel update the pending pressure.
-Partial pressure uses the same vertical and horizontal grip as a fully
-seated felt. The reference factor stays fixed until the pressure is released.
-
-The sympathetic resonance excited by a strike grows with the damper rail lift.
-At partial sustain it receives a fraction of the full-pedal excitation.
-The felt seats fully only at the end of the rail travel. Repeating a partial
-pedal position preserves the pending contact and pressure.
-The seated and partially lifted felt share a gradual reduction of lateral
-grip on the fundamental in the upper register.
-
-Research tools use `RACKFORGE_ROOT` for SDK/tool sources and keep generated
-renders, caches and external reference recordings under ignored `local/`.
-Historical JSON measurements keep their original absolute paths and hashes.
-
-## Moving-string contact experiment
-
-The optional `moving-string-contact` feature keeps mechanical modal coordinates
-alongside the voiced audio states. On a repeated strike, the contact solver
-reads the mean vertical motion of the unison and returns only the new forced
-response. The freely ringing state is not added a second time. The existing
-bridge, detuning, damping and momentum ramp also advance the mechanical state.
-
-```sh
-cargo test --locked --release -p rackforge-concert-grand --lib --features moving-string-contact -- --test-threads=1
-```
-
-This is a listening candidate, disabled by default. It preserves the calibrated
-fresh strike and changes repeated strikes only where the existing modal contact
-solver is used; the upper-register analytic fallback is unchanged. The solver
-still uses an equivalent unison string, rather than three independent contacts.
-It costs extra mechanical-state rotations and a second contact integration on
-repeated notes. The 2026-11-06 comparison under ignored `local/` contains the
-reference and candidate executables, source events, raw renders and measurements.
+Concert Grand is available under the GNU GPL v2 or later. [License](LICENSE) and [third-party notices](NOTICE.md).
