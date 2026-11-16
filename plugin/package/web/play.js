@@ -8,6 +8,7 @@
        */
       const PROTOCOL = "rackforge.plugin.web@1";
       const pending = new Map();
+      const parameterViews = new Map();
       let nextRequest = 1;
 
       const controls = document.getElementById("controls");
@@ -55,11 +56,15 @@
 
       window.addEventListener("message", (event) => {
         const message = event.data;
-        if (!message || message.protocol !== PROTOCOL) return;
+        if (event.source !== parent || !message || message.protocol !== PROTOCOL) return;
         if (message.kind === "context") {
           state.textContent = `Connected · ${message.surface ?? "play"} surface`;
           selectedSoundId = message.instance?.selected_sound_id ?? selectedSoundId;
           void load();
+          return;
+        }
+        if (message.kind === "parameter_changed" && Number.isFinite(message.value)) {
+          parameterViews.get(message.parameter_index)?.(message.value);
           return;
         }
         if (message.kind !== "response") return;
@@ -78,6 +83,9 @@
         const kind = parameter.kind;
         const wrapper = document.createElement("div");
         wrapper.className = "control";
+        if (!parameter.flags?.read_only) {
+          wrapper.dataset.rackforgeParameterIndex = parameter.index;
+        }
         const row = document.createElement("div");
         row.className = "row";
         const name = document.createElement("span");
@@ -146,6 +154,10 @@
           reading.textContent = format(toValue(position));
         };
         show();
+        parameterViews.set(parameter.index, (value) => {
+          slider.value = String(toPosition(value));
+          show();
+        });
         slider.addEventListener("input", () => {
           show();
           void call("plugin.set_parameter", {
@@ -173,6 +185,9 @@
         const kind = parameter.kind;
         const wrapper = document.createElement("div");
         wrapper.className = "control";
+        if (!parameter.flags?.read_only) {
+          wrapper.dataset.rackforgeParameterIndex = parameter.index;
+        }
         const row = document.createElement("div");
         row.className = "row";
         const name = document.createElement("span");
@@ -217,6 +232,10 @@
           reading.textContent = current ? current.name : String(chosen);
         };
         show();
+        parameterViews.set(parameter.index, (value) => {
+          chosen = value;
+          show();
+        });
         segment.append(...buttons.map(({ button }) => button));
         wrapper.append(row, segment);
         return wrapper;
@@ -246,6 +265,7 @@
        * tab at the end.
        */
       function draw(schema, values) {
+        parameterViews.clear();
         const current = new Map(values.map((value) => [value.index, value.value]));
         const pages = [...(schema.pages ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         // Faders for the continuous things, plates for the ones that are A or
